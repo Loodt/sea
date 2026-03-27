@@ -78,11 +78,16 @@ export async function runAndTrace(
 
   const result = await runClaudeSession(prompt, cwd, opts);
 
+  const promptChars = prompt.length;
+  const estimatedTokens = Math.ceil(promptChars / 4);
+
   const traceContent = [
     `# Trace: ${traceName}`,
     ``,
     `- Timestamp: ${new Date().toISOString()}`,
     `- Exit code: ${result.exitCode}`,
+    `- Prompt size: ${(promptChars / 1024).toFixed(1)}KB (${promptChars} chars, ~${estimatedTokens} tokens)`,
+    `- Output size: ${(result.stdout.length / 1024).toFixed(1)}KB`,
     ``,
     `## Output`,
     ``,

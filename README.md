@@ -131,6 +131,7 @@ sea/
   skills/                      cross-project reusable patterns
   tools/                       bilevel-injected TypeScript tools
   eval/rubrics.md              scoring rubrics
+  eval/integrity.md            truthfulness principles (evolvable)
   src/                         TypeScript CLI (thin orchestrator)
 ```
 
@@ -157,26 +158,110 @@ Scores are tracked in `metrics/scores.jsonl`. If the rolling average drops >15%,
 
 ## Running with Claude Code
 
-SEA is designed to run on [Claude Code](https://docs.anthropic.com/en/docs/claude-code) in full-auto mode. The project includes `.claude/settings.local.json` with `bypassPermissions` enabled.
+SEA is built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every step in the loop (EXECUTE, REFLECT, EVOLVE, META) spawns a fresh `claude -p` session with its own 200k context window. The TypeScript CLI orchestrates files and the loop — all research, scoring, and evolution happens inside Claude sessions.
 
-To run from a Claude Code session:
+### Prerequisites
+
+- Claude Code CLI installed and authenticated — `claude --version` should work in your terminal
+- The repo includes `.claude/settings.local.json` with `bypassPermissions` enabled, so spawned sessions run in full-auto mode (web search, file writes, etc. without prompts)
+
+### The simplest way to start
+
+Open Claude Code in the `sea/` directory and tell it what you want to research:
 
 ```
-npx tsx src/cli.ts loop my-research --cooldown 30 --meta-every 5
+cd sea
+claude
 ```
 
-Options:
-- `--cooldown <seconds>` — pause between iterations (default: 30)
-- `--max <n>` — maximum iterations (default: unlimited)
-- `--meta-every <n>` — conductor evolution frequency (default: 5)
+Then describe your project and tell Claude to create and run it:
+
+```
+Create a project called "lithium-recycling" with the goal below, then run
+sea loop for as many iterations as it takes. Use npx tsx src/cli.ts to run
+commands.
+
+Goal:
+Find technically viable methods for recovering lithium from spent EV
+batteries at >90% recovery rate. Compare hydrometallurgical vs
+pyrometallurgical vs direct recycling routes. Produce a comparison
+matrix with recovery efficiency, cost per kg Li recovered, environmental
+impact, and technology readiness level for each method.
+```
+
+Claude Code will run `sea new` interactively, then start the loop. You can walk away — each iteration runs autonomously, evolves the persona, and writes everything to files.
+
+### Running manually
+
+If you prefer to drive each step yourself:
+
+```bash
+# Create the project (interactive discovery questions)
+npx tsx src/cli.ts new lithium-recycling
+
+# Run a single iteration to test
+npx tsx src/cli.ts run lithium-recycling
+
+# Run the continuous loop
+npx tsx src/cli.ts loop lithium-recycling
+```
+
+Loop options:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--cooldown <seconds>` | 30 | Pause between iterations |
+| `--max <n>` | unlimited | Stop after N iterations |
+| `--meta-every <n>` | 5 | Conductor evolution frequency |
+
+### What happens during the loop
+
+Each iteration spawns 3 fresh Claude sessions in sequence:
+
+1. **EXECUTE** — reads persona + goal, researches via web search/fetch, writes output + experiment log + trace
+2. **REFLECT** — reads the execution trace, scores it on 4 dimensions (accuracy, coverage, coherence, insight), writes reflection
+3. **EVOLVE** — reads last 3 reflections, identifies highest-leverage improvement, snapshots old persona, writes updated persona
+
+Every ~5 iterations, a **META** step reads lineage across all projects and updates the conductor (`CLAUDE.md`) itself.
+
+If scores regress >15% from the rolling average, the persona auto-rollbacks to the previous version.
+
+### Monitoring a running project
+
+```bash
+# Current state, scores, and trend
+npx tsx src/cli.ts status lithium-recycling
+
+# Full evolution timeline with score matrix
+npx tsx src/cli.ts history lithium-recycling
+```
+
+Or read the files directly:
+
+| What you want to know | Where to look |
+|----------------------|---------------|
+| What did the last iteration produce? | `output/` |
+| What worked and what didn't? | `experiments/exp-NNN.md` |
+| How was it scored and why? | `reflections/iter-NNN.md` |
+| How is the persona evolving? | `persona.md` (current) or `persona-history/` (all versions) |
+| What changed and why? | `lineage/changes.jsonl` |
+| Score trajectory | `metrics/scores.jsonl` |
+
+### Stopping, resuming, and rolling back
+
+- **Stop:** `Ctrl+C` — finishes the current iteration gracefully, then exits
+- **Resume:** Run `sea loop` again — all state is in files, it picks up where it left off
+- **Single step:** `sea run <project>` — one iteration at a time for closer observation
+- **Rollback persona:** `sea rollback <project> [version]` — restore an earlier persona version
+- **Rollback conductor:** `sea rollback conductor [version]` — restore an earlier conductor version
 
 ## Roadmap
 
 - [x] **Wave 1**: Scaffold + CLI + runner + context assembly
-- [ ] **Wave 2**: Live reflection + scoring pipeline
-- [ ] **Wave 3**: Evolution + never-delete versioning
-- [ ] **Wave 4**: Continuous loop + A/B validation
-- [ ] **Wave 5**: Meta-evolution (conductor self-improvement)
+- [x] **Wave 2**: Live reflection + scoring pipeline
+- [x] **Wave 3**: Evolution + never-delete versioning
+- [x] **Wave 4**: Continuous loop + regression rollback
+- [x] **Wave 5**: Meta-evolution (conductor self-improvement)
 - [ ] **Wave 6**: Skills repository (cross-project patterns)
 - [ ] **Wave 7**: Bilevel code injection (runtime tool generation)
 - [ ] **Wave 8**: Context efficiency (trace summarization, skill filtering)

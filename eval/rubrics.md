@@ -2,7 +2,7 @@
 
 ## Dimensions
 
-### Accuracy (weight: 0.30)
+### Accuracy (weight: 0.25)
 How factually correct are the claims? Are sources cited properly?
 
 | Score | Description |
@@ -13,7 +13,7 @@ How factually correct are the claims? Are sources cited properly?
 | 3-4   | Multiple factual errors, poor sourcing |
 | 1-2   | Largely inaccurate or fabricated |
 
-### Coverage (weight: 0.25)
+### Coverage (weight: 0.20)
 How thoroughly are the relevant topics addressed?
 
 | Score | Description |
@@ -24,7 +24,7 @@ How thoroughly are the relevant topics addressed?
 | 3-4   | Significant gaps in coverage |
 | 1-2   | Only scratches the surface |
 
-### Coherence (weight: 0.20)
+### Coherence (weight: 0.15)
 Is the output well-structured, logically flowing, and readable?
 
 | Score | Description |
@@ -35,7 +35,7 @@ Is the output well-structured, logically flowing, and readable?
 | 3-4   | Confusing organization, hard to follow |
 | 1-2   | Incoherent or unstructured |
 
-### Insight Quality (weight: 0.25)
+### Insight Quality (weight: 0.20)
 Are there novel connections, deep analysis, and actionable findings?
 
 | Score | Description |
@@ -46,6 +46,17 @@ Are there novel connections, deep analysis, and actionable findings?
 | 3-4   | Shallow analysis, obvious conclusions only |
 | 1-2   | No analysis, pure summarization |
 
+### Process Compliance (weight: 0.20)
+Were protocol artifacts produced? Are integrity constraints followed?
+
+| Score | Description |
+|-------|-------------|
+| 9-10  | All artifacts present (trace, exp log, metrics). All claims tagged with epistemic basis. Knowledge store updated. Context budget respected. |
+| 7-8   | Most artifacts present. Most claims tagged. Minor gaps in audit trail. |
+| 5-6   | Some artifacts missing. Partial claim tagging. Knowledge store not updated. |
+| 3-4   | Major artifacts missing. Few or no claim tags. No audit trail. |
+| 1-2   | No protocol artifacts produced. Zero compliance. |
+
 ## Overall Score
 
-Weighted average: `accuracy * 0.30 + coverage * 0.25 + coherence * 0.20 + insightQuality * 0.25`
+Weighted average: `accuracy * 0.25 + coverage * 0.20 + coherence * 0.15 + insightQuality * 0.20 + processCompliance * 0.20`

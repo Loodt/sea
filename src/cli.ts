@@ -28,7 +28,7 @@ program
 // ── sea run <project> ──
 program
   .command("run <project>")
-  .description("Run a single iteration (execute → reflect → evolve)")
+  .description("Run a single iteration (plan → research → synthesize → evaluate → evolve → summarize)")
   .action(async (project: string) => {
     await runIteration(project);
   });
@@ -36,7 +36,7 @@ program
 // ── sea loop <project> ──
 program
   .command("loop <project>")
-  .description("Continuous evolution loop (walk away)")
+  .description("Continuous pipeline loop (walk away)")
   .option("-c, --cooldown <seconds>", "Cooldown between iterations", "30")
   .option("-m, --max <iterations>", "Maximum iterations", "Infinity")
   .option("--meta-every <n>", "Run meta-evolution every N iterations", "5")
@@ -123,12 +123,13 @@ program
     }
 
     console.log(`\n📈 Evolution History: ${project}\n`);
-    console.log("Iter  Persona  Accuracy  Coverage  Coherence  Insight  Overall");
-    console.log("────  ───────  ────────  ────────  ─────────  ───────  ───────");
+    console.log("Iter  Persona  Acc  Cov  Coh  Ins  Proc  Overall");
+    console.log("────  ───────  ───  ───  ───  ───  ────  ───────");
 
     for (const s of scores) {
+      const proc = "processCompliance" in s ? String(s.processCompliance) : "-";
       console.log(
-        `${String(s.iteration).padStart(4)}  ${padVersion(s.personaVersion).padStart(7)}  ${String(s.accuracy).padStart(8)}  ${String(s.coverage).padStart(8)}  ${String(s.coherence).padStart(9)}  ${String(s.insightQuality).padStart(7)}  ${s.overall.toFixed(1).padStart(7)}`
+        `${String(s.iteration).padStart(4)}  ${padVersion(s.personaVersion).padStart(7)}  ${String(s.accuracy).padStart(3)}  ${String(s.coverage).padStart(3)}  ${String(s.coherence).padStart(3)}  ${String(s.insightQuality).padStart(3)}  ${String(proc).padStart(4)}  ${s.overall.toFixed(1).padStart(7)}`
       );
     }
   });

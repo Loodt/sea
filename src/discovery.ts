@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import type { ProjectState } from "./types.js";
@@ -49,6 +49,8 @@ export async function discoverProject(
     "metrics",
     "lineage",
     "output",
+    "knowledge",
+    "scratch",
   ];
 
   for (const dir of dirs) {
@@ -81,11 +83,18 @@ ${new Date().toISOString()}
 
   await writeFile(path.join(projectDir, "goal.md"), goalContent, "utf-8");
 
+  // Load failure patterns to seed persona warnings
+  const failureWarnings = await loadFailureWarnings(seaRoot);
+
   // Write initial persona.md
   const personaContent = `# Expert Persona: ${projectName}
 
 ## Domain
 ${domain}
+
+## Scope Boundaries
+- Competent: ${domain}
+- NOT competent: (will be discovered — flag out-of-scope questions as [OUT-OF-SCOPE])
 
 ## Goal
 ${goal}
@@ -96,28 +105,21 @@ ${goal}
 - strategy-3: Multi-source triangulation — verify claims across 3+ independent sources (confidence: 0.65, used: 0, avg score: N/A)
 
 ## Heuristics
-(none yet — will be learned from execution)
+${failureWarnings || "(none yet — will be learned from execution)"}
 
 ## Source Evaluation
 - Prefer ${sourcePref || "all source types"}
 - Check publication dates — prefer recent sources unless historical context needed
-- Verify author credibility when possible
 - Cross-reference claims between sources
 
 ## Synthesis Approach
 - Structure output as: ${outputFormat || "structured report"}
 - Lead with key findings, then supporting evidence
+- Tag every claim: [SOURCE], [DERIVED], [ESTIMATED], [ASSUMED], [UNKNOWN]
 - Explicitly note contradictions between sources
-- Identify gaps in the available evidence
 
 ## Output Format
 ${outputFormat || "Structured report with sections: Summary, Analysis, Evidence, Gaps, Conclusions"}
-
-## Known Pitfalls
-(none yet — will be learned from failures)
-
-## Available Tools
-(none yet — will be added by evolution)
 `;
 
   await writeFile(path.join(projectDir, "persona.md"), personaContent, "utf-8");
@@ -126,6 +128,33 @@ ${outputFormat || "Structured report with sections: Summary, Analysis, Evidence,
   await writeFile(
     path.join(projectDir, "references", "links.md"),
     `# References: ${projectName}\n\n(Sources will be added during execution)\n`,
+    "utf-8"
+  );
+
+  // Write initial knowledge/summary.md
+  await writeFile(
+    path.join(projectDir, "knowledge", "summary.md"),
+    `# Knowledge Summary: ${projectName}\n\n(No findings yet — updated after each iteration)\n`,
+    "utf-8"
+  );
+
+  // Write initial pipeline.json
+  await writeFile(
+    path.join(projectDir, "pipeline.json"),
+    JSON.stringify(
+      {
+        steps: [
+          { id: "plan", type: "plan" },
+          { id: "research", type: "research" },
+          { id: "synthesize", type: "synthesize" },
+          { id: "evaluate", type: "evaluate" },
+          { id: "evolve", type: "evolve" },
+          { id: "summarize", type: "summarize" },
+        ],
+      },
+      null,
+      2
+    ),
     "utf-8"
   );
 
@@ -149,8 +178,43 @@ ${outputFormat || "Structured report with sections: Summary, Analysis, Evidence,
   );
 
   console.log(`\n✅ Project "${projectName}" created at: ${projectDir}`);
-  console.log(`   goal.md     — problem statement + criteria`);
-  console.log(`   persona.md  — initial expert persona (v001)`);
-  console.log(`   state.json  — iteration tracking`);
+  console.log(`   goal.md       — problem statement + criteria`);
+  console.log(`   persona.md    — initial expert persona (v001)`);
+  console.log(`   pipeline.json — 6-step pipeline config`);
+  console.log(`   knowledge/    — structured findings store`);
+  console.log(`   state.json    — iteration tracking`);
+  if (failureWarnings) {
+    console.log(`   ⚠ Seeded with known failure patterns from prior projects`);
+  }
   console.log(`\nRun: sea loop ${projectName}`);
+}
+
+/**
+ * Load failure patterns from the top-level failure-patterns/ directory
+ * and convert them to compact persona warnings.
+ */
+async function loadFailureWarnings(seaRoot: string): Promise<string> {
+  const dir = path.join(seaRoot, "failure-patterns");
+  try {
+    const files = await readdir(dir);
+    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    if (mdFiles.length === 0) return "";
+
+    const warnings: string[] = [];
+    for (const file of mdFiles) {
+      const content = await readFile(path.join(dir, file), "utf-8");
+      // Extract description line (first paragraph after ## Description)
+      const descMatch = content.match(/## Description\n+([\s\S]*?)(?=\n##|\n$)/);
+      if (descMatch) {
+        const desc = descMatch[1].trim().split("\n")[0];
+        const name = file.replace(".md", "").replace(/-/g, " ");
+        warnings.push(`- **${name}:** ${desc}`);
+      }
+    }
+    return warnings.length > 0
+      ? `(seeded from cross-project failure patterns)\n${warnings.join("\n")}`
+      : "";
+  } catch {
+    return "";
+  }
 }

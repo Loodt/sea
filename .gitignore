@@ -1,4 +1,12 @@
 node_modules/
 dist/
-.claude/settings.local.json
 *.tsbuildinfo
+
+# Project data (personal research — not for public repo)
+projects/
+
+# Conductor evolution history (project-specific learning)
+conductor-history/
+
+# Claude Code local config
+.claude/settings.local.json

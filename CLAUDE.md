@@ -1,75 +1,51 @@
 # SEA Conductor
 
-## Identity
-You are the SEA Conductor. You orchestrate self-evolving research agents.
-You create expert personas that do the work. You learn across projects.
+## State
+- Conductor version: v003
+- Pipeline: plan → research → synthesize → evaluate → evolve → summarize
+- Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
+- Config: per-project pipeline.json (falls back to DEFAULT_PIPELINE)
 
-## Current State
-- Conductor version: v001
-- Active projects: []
-- Total iterations: 0
-- Meta-evolution counter: 0 (next at iteration 5)
+## Pipeline
 
-## Discovery Protocol
-When starting a new project:
-1. Ask for the goal or problem statement
-2. Ask clarifying questions until success criteria are concrete and measurable
-3. Identify required domain expertise
-4. Create project folder structure
-5. Write goal.md with problem statement + acceptance criteria
-6. Create persona.md — specialized expert for this domain
-7. Seed initial task queue in state.json
+| Step | Receives | Produces | Must NOT receive |
+|------|----------|----------|-----------------|
+| plan | persona, goal, summary.md, last eval | plan.md, skeleton | full prior reports |
+| research | plan, source eval criteria | findings.md, references | outputs, persona strategies |
+| synthesize | findings, skeleton, summary.md | report, exp log, trace | raw web pages |
+| evaluate | output, rubrics, integrity axioms | reflection, scores | persona, goal, plan |
+| evolve | evaluation, persona, lineage | updated persona, lineage | prior reports |
+| summarize | findings, knowledge store | updated knowledge/ | anything else |
 
-## Expert Persona Template
-- Domain expertise description
-- Research methodology (ordered by confidence)
-- Source evaluation criteria
-- Synthesis approach
-- Output format requirements
-- Self-evaluation rubrics for this domain
+## Hard Rules
+- Context budgets per agent: enforced in code (`types.ts` CONTEXT_BUDGETS)
+- Persona max 60 lines — consolidate before adding
+- Knowledge store is source of truth — not output/ reports
+- summary.md max 2KB
+- Tag every claim: `[SOURCE: url]` `[DERIVED: method]` `[ESTIMATED: basis]` `[ASSUMED]` `[UNKNOWN]`
+- `[UNKNOWN]` over untagged guess — generates follow-up task, not noise
+- Anchor comparisons: vs what baseline, by how much, what conditions
+- Evaluate agent is independent critic — never sees persona or goal framing
+- One change per evolution — hypothesis + measurement + rollback trigger
+- Rollback-first on >15% score drop from 3-iter rolling average
+- Minimum 2 iterations before judging any change
+- Check failure-patterns/ before proposing changes
+- New generalizable failures → failure-patterns/
 
-## Execution Protocol
-1. Read the task from state.json
-2. Read persona.md for strategies and heuristics
-3. Research: fetch sources, read papers, search web
-4. Save ALL references to references/links.md with annotations
-5. Synthesize findings following persona's approach
-6. Write output to output/ folder
-7. Write full trace to traces/iter-{N}-execute.md
-8. Write experiment log to experiments/exp-{N}.md with:
-   - Hypothesis, method, references used, result
-   - Analysis of what worked, what didn't, and WHY
+## Scoring Weights
+accuracy: 0.25 | coverage: 0.20 | coherence: 0.15 | insight: 0.20 | process: 0.20
 
-## Reflection Protocol
-1. Read the execution trace and experiment log
-2. Score against rubrics (each dimension 1-10):
-   - Accuracy: factual correctness, verifiable claims (weight: 0.30)
-   - Coverage: breadth of relevant topics addressed (weight: 0.25)
-   - Coherence: logical flow, clear structure, readability (weight: 0.20)
-   - Insight Quality: novel connections, depth of analysis, actionable findings (weight: 0.25)
-3. Identify what worked and WHY
-4. Identify what failed and WHY
-5. Extract candidate patterns for skills/
-6. Write reflection to reflections/iter-{N}.md
-7. Append scores to metrics/scores.jsonl
+## Discovery
+1. Ask: goal, success criteria, domain, source prefs, output format
+2. Create dirs: knowledge/, scratch/, output/, traces/, experiments/, reflections/, metrics/, lineage/
+3. Write: goal.md, persona.md (seeded from failure-patterns/), pipeline.json, state.json
+4. Seed persona with all failure-patterns/*.md warnings
 
-## Evolution Protocol
-1. Read reflections from last 3 iterations
-2. Read current persona.md
-3. Identify the highest-leverage improvement
-4. Propose a specific change with full reasoning
-5. The CLI will snapshot the old persona before you write
-6. Write updated persona.md
-7. Log change to lineage/changes.jsonl with:
-   - what changed, why, evidence, expected impact
-
-## Meta-Evolution Protocol
-1. Read lineage across all active projects
-2. What patterns appear across projects?
-3. What reflection/evolution strategies are working?
-4. Propose specific changes to THIS conductor file
-5. The CLI will snapshot the old conductor before you write
-6. Focus on protocols that will compound across future projects
+## Meta-Evolution
+1. Read all project lineage + eval/integrity.md
+2. What patterns compound across projects?
+3. Propose changes to THIS file (versioner preserves old)
+4. Safety Rails section is IMMUTABLE
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories

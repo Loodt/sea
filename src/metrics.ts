@@ -3,46 +3,127 @@ import path from "node:path";
 import type { Score } from "./types.js";
 
 /**
- * Parse scores from a reflection .md file.
- * Looks for a JSON block at the end with score fields.
+ * Updated overall score weights (v002 conductor added processCompliance).
  */
-export function parseScoresFromReflection(
-  reflection: string,
+function computeOverall(scores: {
+  accuracy?: number;
+  coverage?: number;
+  coherence?: number;
+  insightQuality?: number;
+  processCompliance?: number;
+}): number {
+  const a = scores.accuracy ?? 0;
+  const cov = scores.coverage ?? 0;
+  const coh = scores.coherence ?? 0;
+  const iq = scores.insightQuality ?? 0;
+  const pc = scores.processCompliance ?? 0;
+  return a * 0.25 + cov * 0.20 + coh * 0.15 + iq * 0.20 + pc * 0.20;
+}
+
+/**
+ * Parse scores from text. Tries multiple strategies:
+ * 1. JSON code block with score fields
+ * 2. Inline JSON object with score fields
+ * 3. Field extraction from markdown (e.g., "Accuracy: 8/10" or "accuracy.*?(\d+)")
+ */
+export function parseScoresFromText(
+  text: string,
   iteration: number,
   personaVersion: number
 ): Score | null {
-  // Look for JSON block with scores
-  const jsonMatch = reflection.match(
-    /```json\s*\n\s*\{[^}]*"accuracy"\s*:\s*[\d.]+[^}]*\}\s*\n\s*```/
-  );
+  if (!text) return null;
 
-  if (!jsonMatch) return null;
+  // Strategy 1: JSON code block (relaxed — allows multiline and nested)
+  const jsonBlockMatch = text.match(/```json\s*\n([\s\S]*?)\n\s*```/);
+  if (jsonBlockMatch) {
+    const parsed = tryParseScoreJson(jsonBlockMatch[1].trim());
+    if (parsed) return buildScore(parsed, iteration, personaVersion);
+  }
 
+  // Strategy 2: Inline JSON with score fields (no code block)
+  const inlineMatch = text.match(/\{[^{}]*"accuracy"\s*:\s*\d[\s\S]*?\}/);
+  if (inlineMatch) {
+    const parsed = tryParseScoreJson(inlineMatch[0]);
+    if (parsed) return buildScore(parsed, iteration, personaVersion);
+  }
+
+  // Strategy 3: Field extraction from text patterns
+  const fields = extractScoreFields(text);
+  if (fields) return buildScore(fields, iteration, personaVersion);
+
+  return null;
+}
+
+/** Backward-compat alias */
+export const parseScoresFromReflection = parseScoresFromText;
+
+function tryParseScoreJson(raw: string): Record<string, number> | null {
   try {
-    const raw = jsonMatch[0].replace(/```json\s*\n?/, "").replace(/\n?\s*```/, "");
     const parsed = JSON.parse(raw);
-
-    return {
-      iteration,
-      timestamp: new Date().toISOString(),
-      personaVersion,
-      accuracy: parsed.accuracy ?? 0,
-      coverage: parsed.coverage ?? 0,
-      coherence: parsed.coherence ?? 0,
-      insightQuality: parsed.insightQuality ?? 0,
-      overall: parsed.overall ?? computeOverall(parsed),
-    };
+    if (typeof parsed.accuracy === "number") return parsed;
+    return null;
   } catch {
     return null;
   }
 }
 
-function computeOverall(scores: Partial<Score>): number {
-  const a = scores.accuracy ?? 0;
-  const cov = scores.coverage ?? 0;
-  const coh = scores.coherence ?? 0;
-  const iq = scores.insightQuality ?? 0;
-  return a * 0.3 + cov * 0.25 + coh * 0.2 + iq * 0.25;
+function extractScoreFields(text: string): Record<string, number> | null {
+  const patterns: [string, RegExp][] = [
+    ["accuracy", /accuracy[:\s]*(\d+(?:\.\d+)?)/i],
+    ["coverage", /coverage[:\s]*(\d+(?:\.\d+)?)/i],
+    ["coherence", /coherence[:\s]*(\d+(?:\.\d+)?)/i],
+    ["insightQuality", /insight\s*quality[:\s]*(\d+(?:\.\d+)?)/i],
+    ["processCompliance", /process\s*compliance[:\s]*(\d+(?:\.\d+)?)/i],
+  ];
+
+  const result: Record<string, number> = {};
+  let found = 0;
+
+  for (const [key, re] of patterns) {
+    const match = text.match(re);
+    if (match) {
+      result[key] = parseFloat(match[1]);
+      found++;
+    }
+  }
+
+  // Need at least accuracy + one other field
+  return found >= 2 ? result : null;
+}
+
+function buildScore(
+  raw: Record<string, number>,
+  iteration: number,
+  personaVersion: number
+): Score {
+  return {
+    iteration,
+    timestamp: new Date().toISOString(),
+    personaVersion,
+    accuracy: raw.accuracy ?? 0,
+    coverage: raw.coverage ?? 0,
+    coherence: raw.coherence ?? 0,
+    insightQuality: raw.insightQuality ?? 0,
+    processCompliance: raw.processCompliance ?? 0,
+    overall: raw.overall ?? computeOverall(raw),
+  };
+}
+
+/**
+ * Try to parse scores from a reflection file on disk.
+ * Fallback when stdout parsing fails.
+ */
+export async function parseScoresFromFile(
+  filePath: string,
+  iteration: number,
+  personaVersion: number
+): Promise<Score | null> {
+  try {
+    const content = await readFile(filePath, "utf-8");
+    return parseScoresFromText(content, iteration, personaVersion);
+  } catch {
+    return null;
+  }
 }
 
 /**

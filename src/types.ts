@@ -18,13 +18,14 @@ export interface Score {
   coverage: number;
   coherence: number;
   insightQuality: number;
+  processCompliance: number;
   overall: number;
 }
 
 export interface LineageEntry {
   iteration: number;
   timestamp: string;
-  target: "persona.md" | "CLAUDE.md";
+  target: "persona.md" | "CLAUDE.md" | "pipeline.json";
   versionBefore: string;
   versionAfter: string;
   changeType: string;
@@ -34,7 +35,70 @@ export interface LineageEntry {
   scoreAfter: number | null;
 }
 
-export type StepType = "execute" | "reflect" | "evolve" | "meta";
+// ── Knowledge Layer ──
+
+export type EpistemicTag = "SOURCE" | "DERIVED" | "ESTIMATED" | "ASSUMED" | "UNKNOWN";
+export type FindingStatus = "provisional" | "verified" | "refuted" | "superseded";
+export type QuestionStatus = "open" | "resolved" | "deferred";
+
+export interface Finding {
+  id: string;
+  claim: string;
+  tag: EpistemicTag;
+  source: string | null;
+  confidence: number;
+  domain: string;
+  iteration: number;
+  status: FindingStatus;
+  verifiedAt: number | null;
+  supersededBy: string | null;
+}
+
+export interface Question {
+  id: string;
+  question: string;
+  priority: "high" | "medium" | "low";
+  context: string;
+  domain: string;
+  iteration: number;
+  status: QuestionStatus;
+  resolvedAt: number | null;
+  resolvedBy: string | null;
+}
+
+// ── Pipeline Layer ──
+
+export type StepType =
+  | "plan"
+  | "research"
+  | "synthesize"
+  | "evaluate"
+  | "evolve"
+  | "summarize"
+  | "meta";
+
+export interface PipelineStep {
+  id: string;
+  type: StepType;
+  enabled?: boolean;
+}
+
+export interface PipelineConfig {
+  steps: PipelineStep[];
+}
+
+export const DEFAULT_PIPELINE: PipelineConfig = {
+  steps: [
+    { id: "plan", type: "plan" },
+    { id: "research", type: "research" },
+    { id: "synthesize", type: "synthesize" },
+    { id: "evaluate", type: "evaluate" },
+    { id: "evolve", type: "evolve" },
+    { id: "summarize", type: "summarize" },
+  ],
+};
+
+// ── Loop Config ──
 
 export interface LoopConfig {
   cooldownMs: number;
@@ -52,6 +116,30 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   regressionWindow: 3,
 };
 
-export function padVersion(n: number): string {
+// ── Context Monitoring ──
+
+export interface PromptMetrics {
+  step: StepType;
+  iteration: number;
+  charCount: number;
+  estimatedTokens: number;
+  timestamp: string;
+}
+
+/** Hard limits per step type — chars, not tokens (~4 chars/token). */
+export const CONTEXT_BUDGETS: Record<StepType, number> = {
+  plan: 40_000,
+  research: 16_000,
+  synthesize: 32_000,
+  evaluate: 48_000,
+  evolve: 40_000,
+  summarize: 32_000,
+  meta: 48_000,
+};
+
+// ── Utilities ──
+
+export function padVersion(n: number | undefined): string {
+  if (n === undefined || n === null) return "v???";
   return `v${String(n).padStart(3, "0")}`;
 }

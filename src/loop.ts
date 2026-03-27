@@ -1,12 +1,18 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { assemblePrompt } from "./context.js";
+import { assemblePrompt, loadPipeline } from "./context.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
-import { parseScoresFromReflection, appendScore } from "./metrics.js";
+import {
+  parseScoresFromText,
+  parseScoresFromFile,
+  appendScore,
+  readScores,
+} from "./metrics.js";
 import { checkAndRollback, advanceIteration } from "./safety.js";
-import type { ProjectState, LoopConfig } from "./types.js";
-import { DEFAULT_LOOP_CONFIG } from "./types.js";
+import { initKnowledge, readFindings, readQuestions, informationGain } from "./knowledge.js";
+import type { ProjectState, LoopConfig, PipelineStep, Score } from "./types.js";
+import { DEFAULT_LOOP_CONFIG, padVersion } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -21,7 +27,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Run a single iteration: EXECUTE → REFLECT → EVOLVE
+ * Run a single iteration through the configured pipeline.
+ * Default: plan → research → synthesize → evaluate → evolve → summarize
  */
 export async function runIteration(
   projectName: string,
@@ -33,78 +40,119 @@ export async function runIteration(
   const iter = state.iteration;
   const iterStr = String(iter).padStart(3, "0");
 
-  console.log(`\n━━━ Iteration ${iter} (persona v${String(state.personaVersion).padStart(3, "0")}) ━━━\n`);
-
-  // ── EXECUTE ──
-  console.log("📝 EXECUTE — researching...");
-  const executePrompt = await assemblePrompt("execute", projectName);
-  await runAndTrace(
-    executePrompt,
-    projectDir,
-    path.join(projectDir, "traces"),
-    `iter-${iterStr}-execute`
-  );
-  console.log("   ✓ Trace + experiment log written");
-
-  // ── REFLECT ──
-  console.log("🔍 REFLECT — scoring...");
-  const reflectPrompt = await assemblePrompt("reflect", projectName);
-  const reflectResult = await runAndTrace(
-    reflectPrompt,
-    projectDir,
-    path.join(projectDir, "traces"),
-    `iter-${iterStr}-reflect`
+  console.log(
+    `\n━━━ Iteration ${iter} (persona v${String(state.personaVersion).padStart(3, "0")}) ━━━\n`
   );
 
-  // Parse scores from the reflection output
+  // Ensure knowledge + scratch dirs exist
+  await initKnowledge(projectDir);
+  await mkdir(path.join(projectDir, "scratch"), { recursive: true });
+
+  // Load pipeline config
+  const pipeline = await loadPipeline(projectDir);
+  const enabledSteps = pipeline.steps.filter((s) => s.enabled !== false);
+
   let score: number | null = null;
-  const scores = parseScoresFromReflection(
-    reflectResult.stdout,
-    iter,
-    state.personaVersion
-  );
-  if (scores) {
-    await appendScore(projectDir, scores);
-    score = scores.overall;
-    console.log(
-      `   ✓ Scores — accuracy: ${scores.accuracy} | coverage: ${scores.coverage} | coherence: ${scores.coherence} | insight: ${scores.insightQuality} | overall: ${scores.overall.toFixed(1)}`
-    );
-  } else {
-    console.log("   ⚠ Could not parse scores from reflection");
+
+  for (const step of enabledSteps) {
+    const result = await runStep(step, projectName, projectDir, iter, iterStr, state);
+
+    // After evaluate step: parse scores
+    if (step.type === "evaluate") {
+      score = await handleScoring(result, projectDir, iter, iterStr, state);
+    }
+
+    // Before evolve step: snapshot persona
+    if (step.type === "evolve") {
+      await snapshotFile(
+        path.join(projectDir, "persona.md"),
+        path.join(projectDir, "persona-history")
+      );
+    }
   }
 
-  // ── EVOLVE ──
-  console.log("🧬 EVOLVE — improving persona...");
-
-  // Snapshot persona before mutation
-  await snapshotFile(
-    path.join(projectDir, "persona.md"),
-    path.join(projectDir, "persona-history")
-  );
-
-  const evolvePrompt = await assemblePrompt("evolve", projectName);
-  await runAndTrace(
-    evolvePrompt,
-    projectDir,
-    path.join(projectDir, "traces"),
-    `iter-${iterStr}-evolve`
-  );
-
   // Advance state
-  const newState = await advanceIteration(projectDir, true);
-  console.log(`   ✓ Persona → v${String(newState.personaVersion).padStart(3, "0")}`);
+  const hasEvolve = enabledSteps.some((s) => s.type === "evolve");
+  const newState = await advanceIteration(projectDir, hasEvolve);
 
   // Check for regression
   const rolledBack = await checkAndRollback(projectDir, config);
-  if (rolledBack) {
-    console.log("   ↩ Rolled back to previous persona version");
-  }
+
+  // Print the story
+  await printIterationStory(projectDir, iter, iterStr, score, newState, rolledBack);
 
   return { iteration: iter, score };
 }
 
+async function runStep(
+  step: PipelineStep,
+  projectName: string,
+  projectDir: string,
+  iter: number,
+  iterStr: string,
+  state: ProjectState
+): Promise<string> {
+  const labels: Record<string, string> = {
+    plan: "📋 PLAN — creating research plan...",
+    research: "🔍 RESEARCH — gathering data...",
+    synthesize: "📝 SYNTHESIZE — writing report...",
+    evaluate: "⚖️  EVALUATE — scoring output...",
+    evolve: "🧬 EVOLVE — improving persona...",
+    summarize: "📚 SUMMARIZE — updating knowledge store...",
+  };
+
+  console.log(labels[step.type] ?? `▶ ${step.type}...`);
+
+  const prompt = await assemblePrompt(step.type, projectName);
+  const result = await runAndTrace(
+    prompt,
+    projectDir,
+    path.join(projectDir, "traces"),
+    `iter-${iterStr}-${step.type}`
+  );
+
+  if (result.exitCode !== 0) {
+    console.log(`   ⚠ ${step.type} exited with code ${result.exitCode}`);
+  } else {
+    console.log(`   ✓ ${step.type} complete`);
+  }
+
+  return result.stdout;
+}
+
+async function handleScoring(
+  stdout: string,
+  projectDir: string,
+  iter: number,
+  iterStr: string,
+  state: ProjectState
+): Promise<number | null> {
+  // Try parsing from stdout first
+  let scores = parseScoresFromText(stdout, iter, state.personaVersion);
+
+  // Fallback: parse from the reflection file
+  if (!scores) {
+    scores = await parseScoresFromFile(
+      path.join(projectDir, "reflections", `iter-${iterStr}.md`),
+      iter,
+      state.personaVersion
+    );
+  }
+
+  if (scores) {
+    await appendScore(projectDir, scores);
+    console.log(
+      `   ✓ Scores — acc: ${scores.accuracy} | cov: ${scores.coverage} | coh: ${scores.coherence} | ins: ${scores.insightQuality} | proc: ${scores.processCompliance} | overall: ${scores.overall.toFixed(1)}`
+    );
+    return scores.overall;
+  }
+
+  console.log("   ⚠ Could not parse scores from evaluation");
+  return null;
+}
+
 /**
- * Continuous loop: EXECUTE → REFLECT → EVOLVE → repeat.
+ * Continuous loop: pipeline steps → repeat.
  * META step runs every N iterations.
  */
 export async function runLoop(
@@ -112,10 +160,12 @@ export async function runLoop(
   config: LoopConfig = DEFAULT_LOOP_CONFIG
 ): Promise<void> {
   console.log(`\n🌊 SEA Loop — Project: ${projectName}`);
-  console.log(`   Cooldown: ${config.cooldownMs / 1000}s | Meta every: ${config.metaEveryN} iters`);
+  console.log(
+    `   Cooldown: ${config.cooldownMs / 1000}s | Meta every: ${config.metaEveryN} iters`
+  );
+  console.log(`   Pipeline: plan → research → synthesize → evaluate → evolve → summarize`);
   console.log(`   Press Ctrl+C to stop gracefully\n`);
 
-  // Handle graceful shutdown
   process.on("SIGINT", () => {
     console.log("\n\n🛑 Stop requested. Finishing current iteration...");
     requestStop();
@@ -133,7 +183,7 @@ export async function runLoop(
       await readFile(path.join(projectDir, "state.json"), "utf-8")
     );
 
-    // ── META (every N iterations) ──
+    // META (every N iterations)
     if (state.iteration % config.metaEveryN === 0) {
       console.log("\n🧠 META — evolving conductor...");
 
@@ -159,4 +209,216 @@ export async function runLoop(
   }
 
   console.log(`\n🏁 Loop complete. Ran ${totalIterations} iterations.`);
+}
+
+// ── Iteration Story ──
+
+async function safeRead(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Extract narrative headlines from iteration artifacts and print a
+ * human-readable story block to the terminal.
+ */
+async function printIterationStory(
+  projectDir: string,
+  iter: number,
+  iterStr: string,
+  score: number | null,
+  newState: ProjectState,
+  rolledBack: boolean
+): Promise<void> {
+  const BAR = "━";
+  const width = 64;
+
+  // Gather narrative data from files already on disk
+  const [findings, questions, allScores, lineageRaw, reflectionRaw] = await Promise.all([
+    readFindings(projectDir),
+    readQuestions(projectDir),
+    readScores(projectDir),
+    safeRead(path.join(projectDir, "lineage", "changes.jsonl")),
+    safeRead(path.join(projectDir, "reflections", `iter-${iterStr}.md`)),
+  ]);
+
+  // Score delta
+  const prevScore = allScores.length >= 2 ? allScores[allScores.length - 2].overall : null;
+  const scoreDelta =
+    score !== null && prevScore !== null
+      ? score - prevScore
+      : null;
+  const deltaStr =
+    scoreDelta !== null
+      ? scoreDelta >= 0
+        ? ` (+${scoreDelta.toFixed(1)})`
+        : ` (${scoreDelta.toFixed(1)})`
+      : "";
+
+  // Information gain this iteration
+  const gain = informationGain(findings, questions, iter);
+  const openQs = questions.filter((q) => q.status === "open");
+  const verified = findings.filter((f) => f.status === "verified").length;
+
+  // Extract key narrative lines from the reflection
+  const headlines = extractHeadlines(reflectionRaw);
+
+  // Last lineage entry (what persona learned)
+  let personaLearned = "";
+  if (lineageRaw.trim()) {
+    const entries = lineageRaw.trim().split("\n");
+    const last = entries[entries.length - 1];
+    try {
+      const entry = JSON.parse(last);
+      personaLearned = entry.changeSummary || "";
+    } catch {
+      // ignore
+    }
+  }
+
+  // Print the story block
+  console.log(`\n${BAR.repeat(width)}`);
+  console.log(`  Iteration ${iter} Complete`);
+  console.log(BAR.repeat(width));
+
+  if (headlines.discovery) {
+    console.log(`\n  Discovery:  ${wrapIndent(headlines.discovery, 14, width - 4)}`);
+  }
+  if (headlines.surprise) {
+    console.log(`\n  Surprise:   ${wrapIndent(headlines.surprise, 14, width - 4)}`);
+  }
+  if (headlines.lead) {
+    console.log(`\n  New lead:   ${wrapIndent(headlines.lead, 14, width - 4)}`);
+  }
+  if (headlines.gap) {
+    console.log(`\n  Open:       ${wrapIndent(headlines.gap, 14, width - 4)}`);
+  }
+
+  // If no headlines extracted, show a brief status instead
+  if (!headlines.discovery && !headlines.surprise && !headlines.lead && !headlines.gap) {
+    if (gain.newFindings > 0) {
+      console.log(`\n  ${gain.newFindings} new findings added to knowledge store`);
+    } else {
+      console.log(`\n  (No narrative extracted — check reflections/iter-${iterStr}.md)`);
+    }
+  }
+
+  // Stats line
+  const parts: string[] = [];
+  if (score !== null) parts.push(`Score: ${score.toFixed(1)}${deltaStr}`);
+  parts.push(`Findings: ${findings.length} (${verified} verified)`);
+  if (openQs.length > 0) parts.push(`Open Qs: ${openQs.length}`);
+  console.log(`\n  ${parts.join("  |  ")}`);
+
+  // Persona change
+  if (rolledBack) {
+    console.log(`  Persona: rolled back to ${padVersion(newState.personaVersion)}`);
+  } else if (personaLearned) {
+    console.log(`  Persona learned: ${truncateLine(personaLearned, width - 20)}`);
+  }
+
+  console.log(BAR.repeat(width));
+}
+
+/**
+ * Extract narrative headlines from a reflection file.
+ * Looks for "what worked" items, key findings, gaps, and surprises.
+ */
+function extractHeadlines(reflection: string): {
+  discovery: string;
+  surprise: string;
+  lead: string;
+  gap: string;
+} {
+  const result = { discovery: "", surprise: "", lead: "", gap: "" };
+  if (!reflection) return result;
+
+  const lines = reflection.split("\n");
+
+  // Look for specific patterns in the reflection
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : "";
+
+    // Key finding / discovery — look for "key finding", "main finding", "most important"
+    if (!result.discovery && /key\s+find|main\s+find|most\s+important|central\s+(conclusion|finding)/i.test(line)) {
+      result.discovery = extractContent(line, nextLine);
+    }
+
+    // Surprise — look for "surprising", "unexpected", "contradicts", "however"
+    if (!result.surprise && /surpris|unexpect|contradict|however.*assumed|not.*expected/i.test(line)) {
+      result.surprise = extractContent(line, nextLine);
+    }
+
+    // New lead / opportunity — look for "opportunity", "promising", "new approach", "novel"
+    if (!result.lead && /opportunit|new\s+(approach|lead|pathway)|novel|piggyback|could\s+enable/i.test(line)) {
+      result.lead = extractContent(line, nextLine);
+    }
+
+    // Gap / open question — look for "gap", "unknown", "no data", "needs verification"
+    if (!result.gap && /\bgap\b|unknown|no\s+(data|published|measurement)|needs?\s+verif|open\s+question/i.test(line)) {
+      result.gap = extractContent(line, nextLine);
+    }
+  }
+
+  // Fallback: if no discovery found, take the first "what worked" bullet
+  if (!result.discovery) {
+    const workedMatch = reflection.match(/what\s+worked[\s\S]*?\n[-*]\s*\*?\*?(.+)/i);
+    if (workedMatch) {
+      result.discovery = cleanLine(workedMatch[1]);
+    }
+  }
+
+  return result;
+}
+
+function extractContent(line: string, nextLine: string): string {
+  // If the line has substantive content after a colon or dash, use it
+  const colonSplit = line.split(/[:—]\s*/);
+  if (colonSplit.length > 1 && colonSplit[colonSplit.length - 1].length > 20) {
+    return cleanLine(colonSplit.slice(1).join(": "));
+  }
+  // If the line is a heading and the next line has content, use next line
+  if (line.startsWith("#") || line.endsWith(":") || line.length < 30) {
+    if (nextLine && nextLine.length > 10 && !nextLine.startsWith("#")) {
+      return cleanLine(nextLine);
+    }
+  }
+  return cleanLine(line);
+}
+
+function cleanLine(line: string): string {
+  return line
+    .replace(/^[-*#>\d.]+\s*/, "")     // strip bullets, headings, numbers
+    .replace(/\*\*/g, "")               // strip bold markdown
+    .replace(/\[.*?\]/g, "")            // strip markdown links/tags
+    .replace(/\s+/g, " ")              // collapse whitespace
+    .trim()
+    .slice(0, 200);                     // hard cap
+}
+
+function wrapIndent(text: string, indent: number, maxWidth: number): string {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    if (current.length + word.length + 1 > maxWidth - indent && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = current ? current + " " + word : word;
+    }
+  }
+  if (current) lines.push(current);
+
+  return lines.join("\n" + " ".repeat(indent));
+}
+
+function truncateLine(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 3) + "...";
 }
