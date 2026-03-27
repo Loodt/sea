@@ -5,10 +5,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { discoverProject } from "./discovery.js";
 import { runIteration, runLoop } from "./loop.js";
+import { runConductorIteration, runConductorLoop } from "./conductor.js";
 import { restoreVersion, getCurrentVersion } from "./versioner.js";
 import { readScores } from "./metrics.js";
-import type { ProjectState, LoopConfig } from "./types.js";
-import { DEFAULT_LOOP_CONFIG, padVersion } from "./types.js";
+import type { ProjectState, LoopConfig, ConductorConfig, ConductorState } from "./types.js";
+import { DEFAULT_LOOP_CONFIG, DEFAULT_CONDUCTOR_CONFIG, padVersion } from "./types.js";
 
 const program = new Command();
 
@@ -50,6 +51,39 @@ program
     await runLoop(project, config);
   });
 
+// ── sea conduct <project> ──
+program
+  .command("conduct <project>")
+  .description("Two-loop conductor: select questions, create experts, dispatch, integrate")
+  .option("-c, --cooldown <seconds>", "Cooldown between conductor iterations", "30")
+  .option("-m, --max <iterations>", "Maximum conductor iterations", "Infinity")
+  .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
+  .option("--meta-every <n>", "Run conductor meta every N iterations", "3")
+  .action(async (project: string, opts) => {
+    const config: ConductorConfig = {
+      ...DEFAULT_CONDUCTOR_CONFIG,
+      cooldownMs: parseFloat(opts.cooldown) * 1000,
+      maxConductorIterations:
+        opts.max === "Infinity" ? Infinity : parseInt(opts.max, 10),
+      maxExpertIterations: parseInt(opts.expertMax, 10),
+      metaEveryN: parseInt(opts.metaEvery, 10),
+    };
+    await runConductorLoop(project, config);
+  });
+
+// ── sea dispatch <project> ──
+program
+  .command("dispatch <project>")
+  .description("Run a single conductor iteration (select question, create expert, dispatch, integrate)")
+  .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
+  .action(async (project: string, opts) => {
+    const config: ConductorConfig = {
+      ...DEFAULT_CONDUCTOR_CONFIG,
+      maxExpertIterations: parseInt(opts.expertMax, 10),
+    };
+    await runConductorIteration(project, config);
+  });
+
 // ── sea status [project] ──
 program
   .command("status [project]")
@@ -64,10 +98,19 @@ program
         const scores = await readScores(projectDir);
         const lastScore = scores.length > 0 ? scores[scores.length - 1] : null;
 
+        const isConductor = (state as ConductorState).mode === "conductor";
+
         console.log(`\n📊 Project: ${state.name}`);
         console.log(`   Status: ${state.status}`);
-        console.log(`   Iteration: ${state.iteration}`);
-        console.log(`   Persona: ${padVersion(state.personaVersion)}`);
+        console.log(`   Mode: ${isConductor ? "conductor" : "pipeline"}`);
+        if (isConductor) {
+          const cState = state as ConductorState;
+          console.log(`   Conductor iteration: ${cState.conductorIteration ?? "N/A"}`);
+          console.log(`   Expert dispatches: ${cState.totalExpertDispatches ?? 0}`);
+        } else {
+          console.log(`   Iteration: ${state.iteration}`);
+          console.log(`   Persona: ${padVersion(state.personaVersion)}`);
+        }
         console.log(`   Last score: ${lastScore ? lastScore.overall.toFixed(1) : "N/A"}`);
         console.log(`   Total scores: ${scores.length}`);
         if (scores.length > 1) {

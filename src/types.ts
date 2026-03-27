@@ -137,6 +137,98 @@ export const CONTEXT_BUDGETS: Record<StepType, number> = {
   meta: 48_000,
 };
 
+// ── Conductor Layer ──
+
+export type ConductorStepType =
+  | "select-question"
+  | "create-expert"
+  | "integrate-handoff"
+  | "conductor-meta";
+
+export type ExpertStepType =
+  | "expert-plan"
+  | "expert-research"
+  | "expert-synthesize"
+  | "expert-converge";
+
+export type AllStepType = StepType | ConductorStepType | ExpertStepType;
+
+export interface ExpertHandoff {
+  questionId: string;
+  status: "answered" | "killed" | "narrowed" | "exhausted";
+  findings: Finding[];
+  questionUpdates: { id: string; status: QuestionStatus; resolvedBy?: string }[];
+  newQuestions: Omit<Question, "id" | "iteration" | "resolvedAt" | "resolvedBy">[];
+  summary: string;
+  iterationsRun: number;
+  convergenceAchieved: boolean;
+}
+
+export interface ExpertConfig {
+  questionId: string;
+  question: string;
+  persona: string;
+  relevantFindings: Finding[];
+  convergenceCriteria: string;
+  maxIterations: number;
+  projectDir: string;
+  expertDir: string;
+}
+
+export interface QuestionSelection {
+  questionId: string;
+  question: string;
+  reasoning: string;
+  relevantFindingIds: string[];
+  suggestedExpertType: string;
+  estimatedIterations: number;
+}
+
+export interface ConductorState extends ProjectState {
+  mode: "conductor";
+  conductorIteration: number;
+  totalExpertDispatches: number;
+  activeQuestionId: string | null;
+  questionsExhausted: string[];
+}
+
+export interface ConductorConfig {
+  cooldownMs: number;
+  maxConductorIterations: number;
+  maxExpertIterations: number;
+  metaEveryN: number;
+}
+
+export const DEFAULT_CONDUCTOR_CONFIG: ConductorConfig = {
+  cooldownMs: 30_000,
+  maxConductorIterations: Infinity,
+  maxExpertIterations: 5,
+  metaEveryN: 3,
+};
+
+export interface ConductorMetric {
+  conductorIteration: number;
+  questionId: string;
+  expertStatus: ExpertHandoff["status"];
+  findingsAdded: number;
+  questionsResolved: number;
+  newQuestionsCreated: number;
+  innerIterationsRun: number;
+  timestamp: string;
+}
+
+/** Hard limits per conductor/expert step type — chars, not tokens. */
+export const CONDUCTOR_CONTEXT_BUDGETS: Record<ConductorStepType | ExpertStepType, number> = {
+  "select-question": 32_000,
+  "create-expert": 48_000,
+  "integrate-handoff": 32_000,
+  "conductor-meta": 48_000,
+  "expert-plan": 24_000,
+  "expert-research": 16_000,
+  "expert-synthesize": 32_000,
+  "expert-converge": 16_000,
+};
+
 // ── Utilities ──
 
 export function padVersion(n: number | undefined): string {

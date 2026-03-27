@@ -1,11 +1,11 @@
-import type { StepType } from "./types.js";
+import type { StepType, AllStepType } from "./types.js";
 
 /**
  * Returns compact integrity axiom reminders relevant to each pipeline step.
  * These are structural constraints, not suggestions.
  * Source: eval/integrity.md (the full reasoning lives there).
  */
-export function getIntegritySnippets(step: StepType): string {
+export function getIntegritySnippets(step: StepType | AllStepType): string {
   switch (step) {
     case "plan":
       return `## Integrity Constraints
@@ -52,6 +52,53 @@ export function getIntegritySnippets(step: StepType): string {
 
     case "meta":
       return "";
+
+    // ── Conductor steps ──
+
+    case "select-question":
+      return `## Integrity Constraints
+- Select questions that maximize information gain, not questions that are easy to answer
+- Never re-select a question marked "exhausted" unless new evidence makes it viable
+- Justify selection with specific knowledge gaps, not general priority`;
+
+    case "create-expert":
+      return `## Integrity Constraints
+- The expert persona must include explicit domain boundaries ("will NOT do")
+- All 7 anti-hallucination rules must be present
+- Kill criteria must be quantitative, not qualitative
+- The expert must know when to return "killed" — research dead ends are valuable`;
+
+    case "integrate-handoff":
+      return `## Integrity Constraints
+- Validate that findings in the handoff have epistemic tags and sources
+- Cross-check handoff claims against existing verified findings for contradictions
+- New questions from the expert should not duplicate existing open questions`;
+
+    // ── Expert steps ──
+
+    case "expert-plan":
+      return `## Integrity Constraints
+- Focus on the assigned question only — do not scope-creep into adjacent questions
+- Identify the cheapest disconfirming test first (kill fast, invest slow)`;
+
+    case "expert-research":
+      return `## Integrity Constraints
+- Tag every claim: [SOURCE: url], [DERIVED: method], [ESTIMATED: basis], [ASSUMED], [UNKNOWN]
+- Prefer [UNKNOWN] over guessing. An untagged guess poisons the knowledge base.
+- When citing a source, include the URL. Orphaned citations are hallucination candidates.`;
+
+    case "expert-synthesize":
+      return `## Integrity Constraints
+- Carry forward epistemic tags from research. New synthesis claims need their own tags.
+- Anchor every comparison: compared to WHAT baseline, by HOW MUCH, under WHAT conditions.
+- Challenge your key findings: what would need to be true for them to be wrong?`;
+
+    case "expert-converge":
+      return `## Convergence Check
+- Has the question been answered with sufficient evidence? → status: "answered"
+- Has the investigation revealed the hypothesis is non-viable? → status: "killed"
+- Has the scope narrowed to a more precise sub-question? → status: "narrowed"
+- Are you making diminishing returns? → status: "exhausted"`;
 
     default:
       return "";
