@@ -117,6 +117,12 @@ async function runStep(
     console.log(`   ✓ ${step.type} complete`);
   }
 
+  // Print a brief summary of what the step produced
+  const brief = summarizeStepOutput(step.type, result.stdout, projectDir, iterStr);
+  if (brief) {
+    console.log(`   → ${brief}`);
+  }
+
   return result.stdout;
 }
 
@@ -209,6 +215,104 @@ export async function runLoop(
   }
 
   console.log(`\n🏁 Loop complete. Ran ${totalIterations} iterations.`);
+}
+
+// ── Step Summaries ──
+
+/**
+ * Extract a brief summary from a pipeline step's output.
+ * Shows WHAT happened, not THAT it ran.
+ */
+function summarizeStepOutput(
+  stepType: string,
+  stdout: string,
+  projectDir: string,
+  iterStr: string
+): string {
+  if (!stdout || stdout.length < 50) return "";
+
+  switch (stepType) {
+    case "plan": {
+      // Count search queries and questions
+      const queries = (stdout.match(/search.*?["'`]/gi) || []).length;
+      const questions = stdout.split("\n").filter(
+        (l) => l.trim().startsWith("- ") && l.includes("?")
+      ).length;
+      if (queries > 0 || questions > 0) {
+        return `${questions} research questions, ${queries} search queries planned`;
+      }
+      return "";
+    }
+
+    case "research": {
+      // Count findings with epistemic tags
+      const tagged = stdout.split("\n").filter((l) =>
+        /\[(SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN)/.test(l)
+      ).length;
+      const urls = (stdout.match(/https?:\/\/[^\s)]+/g) || []).length;
+      if (tagged > 0) {
+        return `${tagged} tagged findings from ${urls} sources`;
+      }
+      return urls > 0 ? `${urls} sources gathered` : "";
+    }
+
+    case "synthesize": {
+      // Find the report's key conclusion or first substantive line
+      const lines = stdout.split("\n");
+      for (const line of lines) {
+        const t = line.trim();
+        if (/key\s+find|conclusion|executive\s+summ|main\s+result|bottom\s+line/i.test(t)) {
+          const next = lines[lines.indexOf(line) + 1]?.trim();
+          if (next && next.length > 20 && !next.startsWith("#")) {
+            return next.replace(/^[-*]\s*/, "").replace(/\*\*/g, "").slice(0, 120);
+          }
+        }
+      }
+      // Fallback: report size
+      const kb = (stdout.length / 1024).toFixed(0);
+      const sections = lines.filter((l) => /^##\s/.test(l)).length;
+      return `${kb}KB report with ${sections} sections`;
+    }
+
+    case "evaluate": {
+      // Score line is already printed by handleScoring, so extract the top issue
+      const lines = stdout.split("\n");
+      for (const line of lines) {
+        const t = line.trim();
+        if (/weak|gap|miss|fail|improv|issue|concern|flag/i.test(t) && t.length > 30) {
+          return t.replace(/^[-*#>\d.]+\s*/, "").replace(/\*\*/g, "").slice(0, 120);
+        }
+      }
+      return "";
+    }
+
+    case "evolve": {
+      // What changed in the persona
+      const lines = stdout.split("\n");
+      for (const line of lines) {
+        const t = line.trim();
+        if (/added|removed|changed|updated|consolidated|replaced/i.test(t) && t.length > 20) {
+          return t.replace(/^[-*#>\d.]+\s*/, "").replace(/\*\*/g, "").slice(0, 120);
+        }
+      }
+      return "";
+    }
+
+    case "summarize": {
+      // Count what was added to the knowledge store
+      const newFindings = (stdout.match(/"id":\s*"F\d+"/g) || []).length;
+      const newQuestions = (stdout.match(/"id":\s*"Q\d+"/g) || []).length;
+      const resolved = (stdout.match(/"status":\s*"resolved"/g) || []).length;
+      const parts: string[] = [];
+      if (newFindings > 0) parts.push(`${newFindings} findings`);
+      if (newQuestions > 0) parts.push(`${newQuestions} questions`);
+      if (resolved > 0) parts.push(`${resolved} resolved`);
+      return parts.length > 0 ? `Knowledge store: +${parts.join(", +")}` : "";
+    }
+
+    default:
+      return "";
+  }
 }
 
 // ── Iteration Story ──

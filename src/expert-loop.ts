@@ -39,6 +39,12 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
       "utf-8"
     );
 
+    // Print a brief summary of what the expert found
+    const brief = extractBriefSummary(result.stdout);
+    if (brief) {
+      console.log(`      → ${brief}`);
+    }
+
     // Check for convergence / handoff
     const parsed = parseExpertOutput(result.stdout, config.questionId, innerIter);
 
@@ -47,6 +53,9 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
 
       if (parsed.converged) {
         console.log(`      ✓ Expert converged: ${parsed.handoff.status}`);
+        if (parsed.handoff.summary) {
+          console.log(`      ${parsed.handoff.summary.split("\n")[0].slice(0, 100)}`);
+        }
         return parsed.handoff;
       }
     }
@@ -262,6 +271,50 @@ function buildForcedHandoff(
 }
 
 // ── Helpers ──
+
+/**
+ * Extract a one-line summary from the expert's raw output.
+ * Looks for key finding patterns, conclusion lines, or the first substantive sentence.
+ */
+function extractBriefSummary(output: string): string {
+  if (!output) return "";
+
+  const lines = output.split("\n");
+
+  // Strategy 1: Look for "key finding", "main result", "conclusion"
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/key\s+find|main\s+(result|find)|conclusion|verdict|bottom\s+line/i.test(trimmed)) {
+      const content = trimmed
+        .replace(/^[-*#>\d.]+\s*/, "")
+        .replace(/\*\*/g, "")
+        .replace(/^(key finding|main result|conclusion|verdict|bottom line)[:\s]*/i, "")
+        .trim();
+      if (content.length > 20) return content.slice(0, 120);
+    }
+  }
+
+  // Strategy 2: Look for lines with epistemic tags (actual findings)
+  const taggedLines = lines.filter((l) =>
+    /\[(SOURCE|DERIVED|ESTIMATED)/.test(l) && l.trim().length > 30
+  );
+  if (taggedLines.length > 0) {
+    const finding = taggedLines[0]
+      .trim()
+      .replace(/^[-*]\s*/, "")
+      .slice(0, 120);
+    return `${taggedLines.length} tagged findings. First: ${finding}`;
+  }
+
+  // Strategy 3: Count web searches as a progress indicator
+  const searchCount = (output.match(/web_search|WebSearch|searching for/gi) || []).length;
+  const fetchCount = (output.match(/web_fetch|WebFetch|fetching/gi) || []).length;
+  if (searchCount > 0 || fetchCount > 0) {
+    return `${searchCount} searches, ${fetchCount} fetches completed`;
+  }
+
+  return "";
+}
 
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
