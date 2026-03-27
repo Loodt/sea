@@ -1,0 +1,28 @@
+{
+  "name": "sea",
+  "version": "0.1.0",
+  "description": "Self-Evolving Agent — research & synthesis agent that improves itself",
+  "type": "module",
+  "bin": {
+    "sea": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "sea": "tsx src/cli.ts"
+  },
+  "keywords": [
+    "agent",
+    "self-evolving",
+    "research"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}
