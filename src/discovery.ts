@@ -51,6 +51,7 @@ export async function discoverProject(
     "output",
     "knowledge",
     "scratch",
+    "experts",
   ];
 
   for (const dir of dirs) {

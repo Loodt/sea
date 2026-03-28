@@ -132,7 +132,7 @@ export async function runConductorLoop(
         metaPrompt,
         SEA_ROOT,
         path.join(SEA_ROOT, "projects", projectName, "traces"),
-        `conductor-${String(state.conductorIteration - 1).padStart(3, "0")}-meta`
+        `conductor-${String(state.conductorIteration).padStart(3, "0")}-meta`
       );
       console.log("   ✓ Conductor updated");
     }
@@ -233,6 +233,10 @@ async function integrateHandoff(
   handoff: ExpertHandoff,
   conductorIteration: number
 ): Promise<void> {
+  // Snapshot knowledge store counts before integration
+  const findingsBefore = await readFindings(projectDir);
+  const questionsBefore = await readQuestions(projectDir);
+
   const prompt = await assembleHandoffIntegrationPrompt(projectDir, handoff);
   const iterStr = String(conductorIteration).padStart(3, "0");
 
@@ -245,8 +249,21 @@ async function integrateHandoff(
 
   if (result.exitCode !== 0) {
     console.log(`   ⚠ Integration exited with code ${result.exitCode}`);
+  }
+
+  // Post-integration validation: verify knowledge store was actually updated
+  const findingsAfter = await readFindings(projectDir);
+  const questionsAfter = await readQuestions(projectDir);
+  const newFindings = findingsAfter.length - findingsBefore.length;
+  const newQuestions = questionsAfter.length - questionsBefore.length;
+
+  if (newFindings > 0 || newQuestions > 0) {
+    console.log(`   ✓ Knowledge store updated (+${newFindings} findings, +${newQuestions} questions)`);
+  } else if (handoff.findings.length > 0) {
+    console.log(`   ⚠ Integration ran but knowledge store unchanged (expected +${handoff.findings.length} findings)`);
+    console.log(`     Handoff contained findings but none persisted — check integration trace`);
   } else {
-    console.log("   ✓ Knowledge store updated");
+    console.log(`   ✓ Integration complete (no new findings in handoff)`);
   }
 }
 

@@ -91,10 +91,10 @@ export const DEFAULT_PIPELINE: PipelineConfig = {
   steps: [
     { id: "plan", type: "plan" },
     { id: "research", type: "research" },
+    { id: "summarize", type: "summarize" },
     { id: "synthesize", type: "synthesize" },
     { id: "evaluate", type: "evaluate" },
     { id: "evolve", type: "evolve" },
-    { id: "summarize", type: "summarize" },
   ],
 };
 
@@ -129,8 +129,8 @@ export interface PromptMetrics {
 /** Hard limits per step type — chars, not tokens (~4 chars/token). */
 export const CONTEXT_BUDGETS: Record<StepType, number> = {
   plan: 40_000,
-  research: 16_000,
-  synthesize: 32_000,
+  research: 40_000,
+  synthesize: 48_000,
   evaluate: 48_000,
   evolve: 40_000,
   summarize: 32_000,
@@ -219,14 +219,14 @@ export interface ConductorMetric {
 
 /** Hard limits per conductor/expert step type — chars, not tokens. */
 export const CONDUCTOR_CONTEXT_BUDGETS: Record<ConductorStepType | ExpertStepType, number> = {
-  "select-question": 32_000,
-  "create-expert": 48_000,
-  "integrate-handoff": 32_000,
+  "select-question": 40_000,
+  "create-expert": 64_000,
+  "integrate-handoff": 40_000,
   "conductor-meta": 48_000,
-  "expert-plan": 24_000,
-  "expert-research": 16_000,
-  "expert-synthesize": 32_000,
-  "expert-converge": 16_000,
+  "expert-plan": 40_000,
+  "expert-research": 48_000,
+  "expert-synthesize": 48_000,
+  "expert-converge": 24_000,
 };
 
 // ── Utilities ──
