@@ -52,11 +52,19 @@ export async function assembleQuestionSelectionPrompt(
     ? `\nExhausted questions (do NOT select these): ${exhaustedQuestionIds.join(", ")}`
     : "";
 
+  const resolvedQuestions = questions.filter((q) => q.status === "resolved");
+  const openCount = openQuestions.length;
+  const resolvedCount = resolvedQuestions.length;
+  const exhaustedCount = exhaustedQuestionIds.length;
+  const pruningMode = openCount > 15 || (resolvedCount > 0 && openCount / resolvedCount > 2);
+
   const statsText = [
     `Total findings: ${findings.length} (${findings.filter((f) => f.status === "verified").length} verified)`,
-    `Open questions: ${openQuestions.length}`,
+    `Open questions: ${openCount} | Resolved: ${resolvedCount} | Exhausted: ${exhaustedCount}`,
+    `Open:Resolved ratio: ${resolvedCount > 0 ? (openCount / resolvedCount).toFixed(1) : "∞"}:1`,
     `Conductor iteration: ${conductorIteration}`,
-  ].join("\n");
+    pruningMode ? `\n⚠ PRUNING MODE ACTIVE (${openCount} open questions exceeds threshold). Prioritize kill-check and synthesis questions to narrow the frontier below 15 open. Deprioritize mechanism questions. Before dispatching landscape questions, check if existing open questions overlap.` : "",
+  ].filter(Boolean).join("\n");
 
   return `You are the SEA Conductor. Select the single highest-value question to investigate next.
 
@@ -80,8 +88,9 @@ Rank questions by:
 1. **Information gain potential** — Which question, if answered, would unlock the most progress?
 2. **Priority** — HIGH > MEDIUM > LOW
 3. **Feasibility** — Can this be answered through web research?
-4. **Staleness** — Older unanswered questions may indicate blocking gaps
-5. **Dependencies** — Does answering this question enable answering others?
+4. **Domain data density** — Well-documented domains (regulatory, published chemistry) yield 5-10x more findings per iteration than data-sparse domains (facility-specific costs, proprietary data). Prefer data-dense domains when information gain is similar.
+5. **Staleness** — Older unanswered questions may indicate blocking gaps
+6. **Dependencies** — Does answering this question enable answering others?
 
 ${openQuestions.length === 0 ? `## No Open Questions Available
 Generate 3-5 initial research questions from the project goal. These should be:
@@ -94,15 +103,25 @@ Write them to knowledge/questions.jsonl in this format (one per line):
 
 Then select the first one.` : ""}
 
+## Question Type Taxonomy
+Classify each question before dispatch:
+- **landscape** — broad survey of a domain or option space. Standard budget (5 iterations).
+- **kill-check** — hypothesis falsification. High information density. Prioritize when >3 open pathways exist.
+- **data-hunt** — seeks specific numeric values/costs/thresholds. HIGH exhaustion risk. Capped at 3 iterations.
+- **mechanism** — investigates how/why something works. Standard budget.
+- **synthesis** — answerable by combining/re-analyzing existing knowledge store findings. Very high efficiency. Capped at 2 iterations.
+
 ## Instructions
 1. Analyse the open questions against the selection criteria
-2. Select exactly ONE question
-3. Output your selection as a JSON code block:
+2. Classify the question type (landscape, kill-check, data-hunt, or mechanism)
+3. Select exactly ONE question
+4. Output your selection as a JSON code block:
 
 \`\`\`json
 {
   "questionId": "Q___",
   "question": "the full question text",
+  "questionType": "landscape|kill-check|data-hunt|mechanism|synthesis",
   "reasoning": "why this question has the highest value right now (2-3 sentences)",
   "relevantFindingIds": ["F001", "F003"],
   "suggestedExpertType": "descriptive label for the expert needed (e.g., 'chlorination process chemist')",
@@ -146,7 +165,18 @@ ${handoffJson}
 - Are the findings plausible? Do they have sources or derivation methods?
 - Do any findings contradict existing verified findings? If so, flag the contradiction.
 
-### 2. Integrate findings into the knowledge store
+${handoff.status === "crashed" ? `### 1b. Infrastructure Crash
+This dispatch crashed (all inner iterations failed with non-zero exit codes). This is an infrastructure failure, NOT a content signal. Do NOT create an exhaustion-as-finding. The question remains open for re-dispatch once the infrastructure issue is resolved.
+` : ""}${handoff.status === "exhausted" ? `### 1b. Exhaustion-as-Finding
+This dispatch exhausted — the negative result IS knowledge. Create a synthetic finding:
+- ID: F${String(findings.length + 1).padStart(3, "0")}
+- tag: "DERIVED"
+- claim: Describe what search space was covered and what specific data was sought but not found
+- source: null
+- confidence: 0.9 (high confidence that the data doesn't exist in searched sources)
+- Add context about the implication for the research frontier
+- This prevents future dispatches from re-investigating the same gap
+` : ""}### 2. Integrate findings into the knowledge store
 For each finding in the handoff:
 - Assign a proper sequential ID (next after F${String(findings.length).padStart(3, "0")})
 - Append to knowledge/findings.jsonl

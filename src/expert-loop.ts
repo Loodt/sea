@@ -14,6 +14,9 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
 
   let priorOutput = "";
   let lastHandoff: ExpertHandoff | null = null;
+  let bestSuccessfulOutput = "";
+  let bestSuccessfulLength = 0;
+  let successfulIterCount = 0;
 
   for (let innerIter = 1; innerIter <= config.maxIterations; innerIter++) {
     const iterStr = String(innerIter).padStart(2, "0");
@@ -28,8 +31,17 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
       `expert-iter-${iterStr}`
     );
 
-    if (result.exitCode !== 0) {
+    const isCrash = result.exitCode !== 0;
+
+    if (isCrash) {
       console.log(`      ⚠ Expert iteration ${innerIter} exited with code ${result.exitCode}`);
+    } else {
+      successfulIterCount++;
+      // Track best successful output for forced handoff (use highest-content iteration)
+      if (result.stdout.length > bestSuccessfulLength) {
+        bestSuccessfulOutput = result.stdout;
+        bestSuccessfulLength = result.stdout.length;
+      }
     }
 
     // Save the raw output
@@ -64,18 +76,25 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
     priorOutput = truncate(result.stdout, 3000);
   }
 
-  // Max iterations reached — build forced handoff from last output
+  // Max iterations reached — classify the outcome
+  const allCrashed = successfulIterCount === 0;
+
   if (lastHandoff) {
-    lastHandoff.status = "exhausted";
+    lastHandoff.status = allCrashed ? "crashed" : "exhausted";
     lastHandoff.iterationsRun = config.maxIterations;
     lastHandoff.convergenceAchieved = false;
-    console.log(`      ⚠ Expert exhausted after ${config.maxIterations} iterations`);
+    console.log(`      ⚠ Expert ${lastHandoff.status} after ${config.maxIterations} iterations (${successfulIterCount} successful)`);
     return lastHandoff;
   }
 
-  // No handoff parsed at all — build a minimal one
-  console.log(`      ⚠ Expert produced no parseable handoff`);
-  return buildForcedHandoff(config, priorOutput, config.maxIterations);
+  // No handoff parsed — use best successful output for forced handoff
+  if (allCrashed) {
+    console.log(`      ⚠ All ${config.maxIterations} iterations crashed — infrastructure failure`);
+    return buildForcedHandoff(config, "", config.maxIterations, true);
+  }
+
+  console.log(`      ⚠ Expert produced no parseable handoff (${successfulIterCount}/${config.maxIterations} succeeded)`);
+  return buildForcedHandoff(config, bestSuccessfulOutput, config.maxIterations, false);
 }
 
 /**
@@ -248,19 +267,23 @@ function extractHandoffSummary(output: string): string {
 
 /**
  * Build a forced handoff when no parseable handoff was found.
+ * Uses the best successful iteration's output, not the last (potentially crashed) output.
  */
 function buildForcedHandoff(
   config: ExpertConfig,
-  lastOutput: string,
-  iterationsRun: number
+  bestOutput: string,
+  iterationsRun: number,
+  allCrashed: boolean
 ): ExpertHandoff {
-  // Try to extract a summary from the last output
-  const lines = lastOutput.split("\n").filter((l) => l.trim().length > 20);
-  const summary = lines.slice(0, 3).join(" ").slice(0, 500) || "Expert completed without producing a structured handoff.";
+  const lines = bestOutput.split("\n").filter((l) => l.trim().length > 20);
+  const summary = lines.slice(0, 3).join(" ").slice(0, 500) ||
+    (allCrashed
+      ? "All expert iterations crashed — infrastructure failure, not content exhaustion. Question remains open for re-dispatch."
+      : "Expert completed without producing a structured handoff.");
 
   return {
     questionId: config.questionId,
-    status: "exhausted",
+    status: allCrashed ? "crashed" : "exhausted",
     findings: [],
     questionUpdates: [],
     newQuestions: [],

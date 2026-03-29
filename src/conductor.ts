@@ -16,8 +16,9 @@ import type {
   QuestionSelection,
   ExpertHandoff,
   ConductorMetric,
+  QuestionType,
 } from "./types.js";
-import { DEFAULT_CONDUCTOR_CONFIG } from "./types.js";
+import { DEFAULT_CONDUCTOR_CONFIG, QUESTION_TYPE_ITERATION_CAP } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -47,6 +48,18 @@ export async function runConductorIteration(
   const cIter = state.conductorIteration;
   const cIterStr = String(cIter).padStart(3, "0");
 
+  // Clean stale entries from questionsExhausted (questions resolved since exhaustion)
+  if (state.questionsExhausted.length > 0) {
+    const allQuestions = await readQuestions(projectDir);
+    const resolvedIds = new Set(allQuestions.filter((q) => q.status === "resolved").map((q) => q.id));
+    const stale = state.questionsExhausted.filter((id) => resolvedIds.has(id));
+    if (stale.length > 0) {
+      state.questionsExhausted = state.questionsExhausted.filter((id) => !resolvedIds.has(id));
+      await writeFile(path.join(projectDir, "state.json"), JSON.stringify(state, null, 2), "utf-8");
+      console.log(`   ℹ Cleaned ${stale.length} stale exhausted entries: ${stale.join(", ")}`);
+    }
+  }
+
   console.log(`\n━━━ Conductor Iteration ${cIter} ━━━\n`);
 
   // Step 1: Select question
@@ -55,17 +68,22 @@ export async function runConductorIteration(
   console.log(`   ✓ Selected: ${selection.questionId} — ${truncateLine(selection.question, 60)}`);
   console.log(`   Expert type: ${selection.suggestedExpertType}`);
 
-  // Step 2: Create expert
+  // Step 2: Create expert (cap iterations by question type)
+  const typeCap = QUESTION_TYPE_ITERATION_CAP[selection.questionType] ?? config.maxExpertIterations;
+  const effectiveMaxIter = Math.min(config.maxExpertIterations, typeCap);
   console.log("\n🧬 CREATE — building expert persona...");
-  const expertConfig = await createExpert(selection, projectDir, cIter, config.maxExpertIterations);
+  if (effectiveMaxIter < config.maxExpertIterations) {
+    console.log(`   Question type "${selection.questionType}" → capped at ${effectiveMaxIter} iterations`);
+  }
+  const expertConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter);
 
   // Step 3: Run expert loop
-  console.log(`\n🔬 DISPATCH — expert running (max ${config.maxExpertIterations} iterations)...`);
+  console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
   const handoff = await runExpertLoop(expertConfig);
 
   // Step 4: Integrate handoff
   console.log("\n📥 INTEGRATE — merging results into knowledge store...");
-  await integrateHandoff(projectDir, handoff, cIter);
+  const delta = await integrateHandoff(projectDir, handoff, cIter);
 
   // Print story
   await printConductorStory(projectDir, cIter, selection, handoff);
@@ -78,9 +96,9 @@ export async function runConductorIteration(
     conductorIteration: cIter,
     questionId: selection.questionId,
     expertStatus: handoff.status,
-    findingsAdded: handoff.findings.length,
+    findingsAdded: delta.findingsAdded,
     questionsResolved: handoff.questionUpdates.length,
-    newQuestionsCreated: handoff.newQuestions.length,
+    newQuestionsCreated: delta.questionsAdded,
     innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
   });
@@ -185,16 +203,7 @@ function parseQuestionSelection(output: string): QuestionSelection | null {
     try {
       const parsed = JSON.parse(jsonBlockMatch[1].trim());
       if (parsed.questionId && parsed.question) {
-        return {
-          questionId: parsed.questionId,
-          question: parsed.question,
-          reasoning: parsed.reasoning ?? "",
-          relevantFindingIds: Array.isArray(parsed.relevantFindingIds)
-            ? parsed.relevantFindingIds
-            : [],
-          suggestedExpertType: parsed.suggestedExpertType ?? "general researcher",
-          estimatedIterations: parsed.estimatedIterations ?? 3,
-        };
+        return buildSelection(parsed);
       }
     } catch {
       // fall through
@@ -207,16 +216,7 @@ function parseQuestionSelection(output: string): QuestionSelection | null {
     try {
       const parsed = JSON.parse(inlineMatch[0]);
       if (parsed.questionId && parsed.question) {
-        return {
-          questionId: parsed.questionId,
-          question: parsed.question,
-          reasoning: parsed.reasoning ?? "",
-          relevantFindingIds: Array.isArray(parsed.relevantFindingIds)
-            ? parsed.relevantFindingIds
-            : [],
-          suggestedExpertType: parsed.suggestedExpertType ?? "general researcher",
-          estimatedIterations: parsed.estimatedIterations ?? 3,
-        };
+        return buildSelection(parsed);
       }
     } catch {
       // fall through
@@ -226,13 +226,33 @@ function parseQuestionSelection(output: string): QuestionSelection | null {
   return null;
 }
 
+const VALID_QUESTION_TYPES = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis"] as const;
+
+function buildSelection(parsed: Record<string, unknown>): QuestionSelection {
+  const qt = typeof parsed.questionType === "string" &&
+    VALID_QUESTION_TYPES.includes(parsed.questionType as QuestionType)
+    ? (parsed.questionType as QuestionType)
+    : "mechanism"; // safe default — standard budget, no special handling
+  return {
+    questionId: parsed.questionId as string,
+    question: parsed.question as string,
+    reasoning: (parsed.reasoning as string) ?? "",
+    relevantFindingIds: Array.isArray(parsed.relevantFindingIds)
+      ? (parsed.relevantFindingIds as string[])
+      : [],
+    suggestedExpertType: (parsed.suggestedExpertType as string) ?? "general researcher",
+    estimatedIterations: (parsed.estimatedIterations as number) ?? 3,
+    questionType: qt,
+  };
+}
+
 // ── Handoff Integration ──
 
 async function integrateHandoff(
   projectDir: string,
   handoff: ExpertHandoff,
   conductorIteration: number
-): Promise<void> {
+): Promise<{ findingsAdded: number; questionsAdded: number }> {
   // Snapshot knowledge store counts before integration
   const findingsBefore = await readFindings(projectDir);
   const questionsBefore = await readQuestions(projectDir);
@@ -265,6 +285,8 @@ async function integrateHandoff(
   } else {
     console.log(`   ✓ Integration complete (no new findings in handoff)`);
   }
+
+  return { findingsAdded: newFindings, questionsAdded: newQuestions };
 }
 
 // ── State Management ──
@@ -300,6 +322,7 @@ async function advanceConductorState(
       state.questionsExhausted.push(handoff.questionId);
     }
   }
+  // "crashed" status: question stays open for re-dispatch — do NOT add to exhausted list
 
   await writeFile(
     path.join(projectDir, "state.json"),
@@ -322,6 +345,20 @@ async function appendConductorMetric(
 
   try {
     const existing = await readFile(filePath, "utf-8");
+    // Deduplication: skip if this conductorIteration already logged
+    const lines = existing.trim().split("\n").filter((l) => l.trim());
+    const alreadyLogged = lines.some((line) => {
+      try {
+        const entry = JSON.parse(line);
+        return entry.conductorIteration === metric.conductorIteration;
+      } catch {
+        return false;
+      }
+    });
+    if (alreadyLogged) {
+      console.log(`   ℹ Metric for conductor iteration ${metric.conductorIteration} already exists — skipping`);
+      return;
+    }
     await writeFile(filePath, existing + JSON.stringify(metric) + "\n", "utf-8");
   } catch {
     await writeFile(filePath, JSON.stringify(metric) + "\n", "utf-8");
@@ -348,6 +385,7 @@ async function printConductorStory(
     killed: "💀",
     narrowed: "🔍",
     exhausted: "⏳",
+    crashed: "💥",
   };
 
   console.log(`\n${BAR.repeat(width)}`);

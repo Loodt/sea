@@ -21,7 +21,7 @@ export async function createExpert(
   await mkdir(expertDir, { recursive: true });
 
   // Assemble the expert creation prompt
-  const prompt = await assembleExpertCreationPrompt(selection, projectDir);
+  const prompt = await assembleExpertCreationPrompt(selection, projectDir, maxExpertIterations);
 
   console.log("   Building expert persona...");
 
@@ -69,6 +69,7 @@ export async function createExpert(
     maxIterations: maxExpertIterations,
     projectDir,
     expertDir,
+    questionType: selection.questionType,
   };
 }
 
@@ -77,7 +78,8 @@ export async function createExpert(
  */
 async function assembleExpertCreationPrompt(
   selection: QuestionSelection,
-  projectDir: string
+  projectDir: string,
+  maxExpertIterations: number = 5
 ): Promise<string> {
   // Load the framework template
   const framework = await readFile(
@@ -106,7 +108,9 @@ async function assembleExpertCreationPrompt(
 
 QUESTION: ${selection.question}
 QUESTION_ID: ${selection.questionId}
+QUESTION_TYPE: ${selection.questionType}
 SUGGESTED_EXPERT_TYPE: ${selection.suggestedExpertType}
+${selection.questionType === "data-hunt" ? "\n⚠ DATA-HUNT QUESTION: If after 2 iterations you have found no concrete data, declare exhaustion in your next handoff rather than repeating similar searches. This question type has high exhaustion risk — do not burn iterations on empty search spaces.\n" : ""}
 
 PROJECT GOAL:
 ${truncate(goal, 2000)}
@@ -120,7 +124,7 @@ ${findingsText}
 FAILURE PATTERNS:
 ${failurePatterns || "(None documented yet)"}
 
-MAX_ITERATIONS: ${5}
+MAX_ITERATIONS: ${maxExpertIterations}
 
 Now produce the expert persona following the 6-section anatomy. Wrap it between ===PERSONA_START=== and ===PERSONA_END=== delimiters.
 `;
@@ -152,6 +156,7 @@ function extractPersonaFromOutput(output: string): string | null {
 /**
  * Select findings relevant to the expert's question.
  * Uses domain matching and explicit ID references from the selection.
+ * When the store is large, prioritizes domain-relevant findings over random ones.
  */
 async function selectRelevantFindings(
   projectDir: string,
@@ -160,18 +165,39 @@ async function selectRelevantFindings(
 ): Promise<Finding[]> {
   const allFindings = await readFindings(projectDir);
 
-  // Start with explicitly referenced findings
+  // Tier 1: Explicitly referenced findings
   const byId = allFindings.filter((f) => selection.relevantFindingIds.includes(f.id));
+  const remaining = maxFindings - byId.length;
 
-  // Add verified/provisional findings (most useful for context)
+  // Active findings not already selected by ID
   const active = allFindings.filter(
     (f) =>
       (f.status === "verified" || f.status === "provisional") &&
       !selection.relevantFindingIds.includes(f.id)
   );
 
+  // Tier 2: When the store is large, prioritize domain-relevant findings
+  let prioritized: Finding[];
+  if (active.length > remaining * 2) {
+    const keywords = extractDomainKeywords(selection.question);
+    const scored = active.map((f) => ({
+      finding: f,
+      relevance: keywords.filter((kw) =>
+        (f.domain || "").toLowerCase().includes(kw) ||
+        f.claim.toLowerCase().includes(kw)
+      ).length,
+    }));
+    scored.sort((a, b) =>
+      b.relevance - a.relevance ||
+      (b.finding.status === "verified" ? 1 : 0) - (a.finding.status === "verified" ? 1 : 0)
+    );
+    prioritized = scored.map((s) => s.finding);
+  } else {
+    prioritized = active;
+  }
+
   // Combine, deduplicate, cap
-  const combined = [...byId, ...active];
+  const combined = [...byId, ...prioritized];
   const seen = new Set<string>();
   const deduped = combined.filter((f) => {
     if (seen.has(f.id)) return false;
@@ -180,6 +206,18 @@ async function selectRelevantFindings(
   });
 
   return deduped.slice(0, maxFindings);
+}
+
+/**
+ * Extract meaningful domain keywords from question text for relevance matching.
+ */
+function extractDomainKeywords(text: string): string[] {
+  const stops = new Set(["the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "was", "has", "how", "its", "may", "what", "when", "where", "which", "with", "would", "could", "should", "about", "from", "into", "does", "have", "been", "that", "them", "then", "these", "they", "this", "those", "will", "more", "also"]);
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 4 && !stops.has(w));
 }
 
 // ── Helpers ──
@@ -205,7 +243,7 @@ async function loadFailurePatterns(): Promise<string> {
     if (mdFiles.length === 0) return "";
 
     const patterns: string[] = [];
-    for (const file of mdFiles.slice(0, 5)) {
+    for (const file of mdFiles) {
       const content = await safeRead(path.join(dir, file));
       const descMatch = content.match(/## Description\n+([\s\S]*?)(?=\n##|\n$)/);
       if (descMatch) {

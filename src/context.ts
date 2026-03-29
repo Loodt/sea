@@ -299,16 +299,20 @@ ${truncate(goal, 1000)}
 
 ${integrity}
 
+## Finding ID Discipline
+When referencing findings in the report, use ONLY IDs that exist in knowledge/findings.jsonl (the summarize step just updated it). Read the file to see available IDs. Do NOT invent finding IDs — if a claim isn't in the store, present it without an ID or tag it [DERIVED].
+
 ## Instructions
-1. Write the report to output/ following the skeleton structure
-2. Carry forward epistemic tags from findings — do NOT strip them
-3. Where you add new claims in synthesis (comparisons, conclusions), tag them as [DERIVED: synthesis of findings] or [ESTIMATED: based on X]
-4. Anchor every comparison: compared to what, by how much, under what conditions
-5. After writing the deliverable, IMMEDIATELY complete protocol artifacts:
+1. Read knowledge/findings.jsonl to see the current finding IDs available for reference
+2. Write the report to output/ following the skeleton structure
+3. Carry forward epistemic tags from findings — do NOT strip them
+4. Where you add new claims in synthesis (comparisons, conclusions), tag them as [DERIVED: synthesis of findings] or [ESTIMATED: based on X]
+5. Anchor every comparison: compared to what, by how much, under what conditions
+6. After writing the deliverable, IMMEDIATELY complete protocol artifacts:
    - Update experiments/exp-${iterStr}.md with results + analysis (what worked, what didn't, WHY)
    - Write trace to traces/iter-${iterStr}-execute.md
-6. Do NOT do web searches — work only from the findings and knowledge summary
-7. Flag any critical gaps as [UNKNOWN] — these become questions for the next iteration
+7. Do NOT do web searches — work only from the findings and knowledge summary
+8. Flag any critical gaps as [UNKNOWN] — these become questions for the next iteration
 `;
 }
 
@@ -331,20 +335,27 @@ async function assembleEvaluate(
     path.join(projectDir, "experiments", `exp-${iterStr}.md`)
   );
 
-  // Find the output file(s) for this iteration — use the most recent file
+  // Read this iteration's output file (fall back to latest if naming differs)
   const outputDir = path.join(projectDir, "output");
-  let outputContent = "";
-  try {
-    const files = await readdir(outputDir);
-    const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
-    if (mdFiles.length > 0) {
-      const latest = mdFiles[mdFiles.length - 1];
-      const raw = await safeRead(path.join(outputDir, latest));
-      outputContent = truncate(raw, 8000);
+  let outputContent = await safeRead(path.join(outputDir, `iter-${iterStr}-report.md`));
+  if (!outputContent) {
+    try {
+      const files = await readdir(outputDir);
+      const iterFiles = files.filter((f) => f.includes(iterStr) && f.endsWith(".md")).sort();
+      if (iterFiles.length > 0) {
+        outputContent = await safeRead(path.join(outputDir, iterFiles[0]));
+      } else {
+        // Last resort: latest file
+        const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
+        if (mdFiles.length > 0) {
+          outputContent = await safeRead(path.join(outputDir, mdFiles[mdFiles.length - 1]));
+        }
+      }
+    } catch {
+      // no output dir
     }
-  } catch {
-    // no output dir
   }
+  outputContent = truncate(outputContent, 12000);
 
   // Rubrics (from eval/)
   const rubrics = await safeRead(path.join(SEA_ROOT, "eval", "rubrics.md"));
@@ -404,7 +415,7 @@ ${gain.newFindings === 0 && gain.resolvedQuestions === 0 ? "\n**⚠ STAGNATION W
 \`\`\`json
 {"accuracy": N, "coverage": N, "coherence": N, "insightQuality": N, "processCompliance": N, "overall": N}
 \`\`\`
-8. Append scores to metrics/scores.jsonl
+   (The loop infrastructure will parse this block and persist scores — do NOT write to scores.jsonl yourself.)
 `;
 }
 
@@ -500,68 +511,65 @@ async function assembleSummarize(
   const findings = await readFindings(projectDir);
   const questions = await readQuestions(projectDir);
 
-  // The findings from research step
+  // The findings from research step (just produced — this is the primary input)
   const rawFindings = await safeRead(
     path.join(projectDir, "scratch", `iter-${iterStr}-findings.md`)
   );
 
-  // The output summary (headings + first paragraphs)
-  const outputDir = path.join(projectDir, "output");
-  let outputHeadings = "";
-  try {
-    const files = await readdir(outputDir);
-    const mdFiles = files.filter((f) => f.endsWith(".md")).sort();
-    if (mdFiles.length > 0) {
-      const latest = mdFiles[mdFiles.length - 1];
-      const raw = await safeRead(path.join(outputDir, latest));
-      outputHeadings = extractHeadings(raw);
-    }
-  } catch {
-    // no output
-  }
-
-  // Evaluation key points
-  const evalFile = await safeRead(
-    path.join(projectDir, "reflections", `iter-${iterStr}.md`)
-  );
-  const evalBrief = truncate(evalFile, 1000);
+  // Previous iteration's evaluation (for question resolution context)
+  const prevIterStr = String(iter - 1).padStart(3, "0");
+  const prevEval = iter > 1
+    ? await safeRead(path.join(projectDir, "reflections", `iter-${prevIterStr}.md`))
+    : "";
+  const evalBrief = prevEval ? truncate(prevEval, 1000) : "";
 
   const integrity = getIntegritySnippets("summarize");
 
-  return `You are the knowledge manager. Update the structured knowledge store with findings from this iteration.
+  // Max existing finding ID for safe ID assignment
+  const maxFindingId = findings.length > 0
+    ? Math.max(...findings.map((f) => parseInt(f.id.replace(/\D/g, ""), 10) || 0))
+    : 0;
+  const maxQuestionId = questions.length > 0
+    ? Math.max(...questions.map((q) => parseInt(q.id.replace(/\D/g, ""), 10) || 0))
+    : 0;
+
+  return `You are the knowledge manager. Persist research findings to the structured knowledge store BEFORE synthesis runs.
 
 Your working directory is: ${projectDir}
 
 ${integrity}
 
+## CRITICAL: This step runs BEFORE synthesis
+The synthesize step reads from the knowledge store you update here. Any finding you persist now will be available for the report. Any finding you miss will not exist for synthesis to reference. This is the ONLY opportunity to persist this iteration's research.
+
 ## Current Knowledge Store
 - ${findings.length} existing findings (${findings.filter((f) => f.status === "verified").length} verified, ${findings.filter((f) => f.status === "provisional").length} provisional)
 - ${questions.length} existing questions (${questions.filter((q) => q.status === "open").length} open)
+- Max finding ID: F${String(maxFindingId).padStart(3, "0")} — new findings start at F${String(maxFindingId + 1).padStart(3, "0")}
+- Max question ID: Q${String(maxQuestionId).padStart(3, "0")} — new questions start at Q${String(maxQuestionId + 1).padStart(3, "0")}
 
 ## Research Findings (this iteration)
-${truncate(rawFindings, 3000)}
+${rawFindings || "(No findings file found)"}
 
-## Output Headings (this iteration)
-${outputHeadings || "(no output)"}
-
-## Evaluation Summary
-${evalBrief}
+${evalBrief ? `## Previous Evaluation Summary (for question resolution context)\n${evalBrief}` : ""}
 
 ## Current Iteration: ${iter}
 
 ## Instructions
-1. Extract new findings from the research and output. For each, write a JSONL entry to knowledge/findings.jsonl:
-   \`{"id": "F${String(findings.length + 1).padStart(3, "0")}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": ${iter}, "status": "provisional", "verifiedAt": null, "supersededBy": null}\`
-2. Check if any existing provisional findings were confirmed or contradicted by this iteration's research. Update their status in findings.jsonl.
-3. Extract new open questions. Write to knowledge/questions.jsonl:
-   \`{"id": "Q${String(questions.length + 1).padStart(3, "0")}", "question": "...", "priority": "high|medium|low", "context": "...", "domain": "...", "iteration": ${iter}, "status": "open", "resolvedAt": null, "resolvedBy": null}\`
-4. Check if any open questions were answered. Update their status.
-5. Write an updated knowledge/summary.md (max 2KB) with:
+1. Read knowledge/findings.jsonl to confirm the current max ID (should be F${String(maxFindingId).padStart(3, "0")})
+2. Extract new findings from the research. For each, APPEND a JSONL entry to knowledge/findings.jsonl:
+   \`{"id": "F${String(maxFindingId + 1).padStart(3, "0")}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": ${iter}, "status": "provisional", "verifiedAt": null, "supersededBy": null}\`
+   Increment the ID for each finding. NEVER reuse an existing ID.
+3. Check if any existing provisional findings were confirmed or contradicted by this iteration's research. Update their status in findings.jsonl.
+4. Extract new open questions. APPEND to knowledge/questions.jsonl starting at Q${String(maxQuestionId + 1).padStart(3, "0")}:
+   \`{"id": "Q${String(maxQuestionId + 1).padStart(3, "0")}", "question": "...", "priority": "high|medium|low", "context": "...", "domain": "...", "iteration": ${iter}, "status": "open", "resolvedAt": null, "resolvedBy": null}\`
+5. Check if any open questions were answered. Update their status.
+6. Write an updated knowledge/summary.md (max 2KB) with:
    - Verified findings (bullet list)
    - Key provisional findings
    - High-priority open questions
    - Brief status line (counts)
-   This is what the PLAN agent reads next iteration — keep it dense and current.
+   This is what the SYNTHESIZE agent reads next — keep it dense and current.
 `;
 }
 
@@ -641,7 +649,7 @@ async function loadFailurePatterns(): Promise<string> {
     if (mdFiles.length === 0) return "";
 
     const patterns: string[] = [];
-    for (const file of mdFiles.slice(0, 5)) {
+    for (const file of mdFiles) {
       const content = await safeRead(path.join(dir, file));
       // Extract just the description and prevention — not the full file
       const desc = extractSection(content, "Description");

@@ -155,7 +155,7 @@ export type AllStepType = StepType | ConductorStepType | ExpertStepType;
 
 export interface ExpertHandoff {
   questionId: string;
-  status: "answered" | "killed" | "narrowed" | "exhausted";
+  status: "answered" | "killed" | "narrowed" | "exhausted" | "crashed";
   findings: Finding[];
   questionUpdates: { id: string; status: QuestionStatus; resolvedBy?: string }[];
   newQuestions: Omit<Question, "id" | "iteration" | "resolvedAt" | "resolvedBy">[];
@@ -173,7 +173,10 @@ export interface ExpertConfig {
   maxIterations: number;
   projectDir: string;
   expertDir: string;
+  questionType: QuestionType;
 }
+
+export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis";
 
 export interface QuestionSelection {
   questionId: string;
@@ -182,7 +185,17 @@ export interface QuestionSelection {
   relevantFindingIds: string[];
   suggestedExpertType: string;
   estimatedIterations: number;
+  questionType: QuestionType;
 }
+
+/** Max inner iterations per question type. Data-hunt capped at 3, synthesis at 2. */
+export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
+  landscape: 5,
+  "kill-check": 5,
+  "data-hunt": 3,
+  mechanism: 5,
+  synthesis: 2,
+};
 
 export interface ConductorState extends ProjectState {
   mode: "conductor";
