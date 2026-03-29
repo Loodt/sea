@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { readSummary, readFindings, readQuestions } from "./knowledge.js";
+import { readSummary, readFindings, readQuestions, findingCounts } from "./knowledge.js";
 import type { ExpertHandoff, Question, Finding } from "./types.js";
 
 const SEA_ROOT = process.cwd();
@@ -85,12 +85,15 @@ ${exhaustedText}
 
 ## Selection Criteria
 Rank questions by:
-1. **Information gain potential** — Which question, if answered, would unlock the most progress?
-2. **Priority** — HIGH > MEDIUM > LOW
-3. **Feasibility** — Can this be answered through web research?
-4. **Domain data density** — Well-documented domains (regulatory, published chemistry) yield 5-10x more findings per iteration than data-sparse domains (facility-specific costs, proprietary data). Prefer data-dense domains when information gain is similar.
-5. **Staleness** — Older unanswered questions may indicate blocking gaps
-6. **Dependencies** — Does answering this question enable answering others?
+1. **Decision-relevance per research cost** — Which question, if answered, would most change what the project recommends? Prefer questions where a $500 lab test resolves more than 5 iterations of web search.
+2. **Information gain potential** — Which question, if answered, would unlock the most progress?
+3. **Priority** — HIGH > MEDIUM > LOW
+4. **Feasibility** — Can this be answered through web research? (see pre-screen below)
+5. **Domain data density** — Well-documented domains (regulatory, published chemistry) yield 5-10x more findings per iteration than data-sparse domains (facility-specific costs, proprietary data). Prefer data-dense domains when information gain is similar.
+6. **Staleness** — Older unanswered questions may indicate blocking gaps
+7. **Dependencies** — Does answering this question enable answering others?
+
+When a question requires primary research (lab work, site visit, paid data), do NOT dispatch an expert. Instead, flag it with a cost estimate and recommend it as a next action in the summary.
 
 ${openQuestions.length === 0 ? `## No Open Questions Available
 Generate 3-5 initial research questions from the project goal. These should be:
@@ -110,6 +113,13 @@ Classify each question before dispatch:
 - **data-hunt** — seeks specific numeric values/costs/thresholds. HIGH exhaustion risk. Capped at 3 iterations.
 - **mechanism** — investigates how/why something works. Standard budget.
 - **synthesis** — answerable by combining/re-analyzing existing knowledge store findings. Very high efficiency. Capped at 2 iterations.
+
+## Feasibility Pre-Screen
+Before selecting any question, estimate web-researchability (probability the answer exists in public sources):
+- **HIGH (>70%):** Published science, regulatory data, commercial product specs, established engineering parameters
+- **MEDIUM (30-70%):** Industry reports, conference papers, analogous system data requiring extrapolation
+- **LOW (<30%):** Facility-specific costs, proprietary data, unpublished measurements, specific site configurations
+If feasibility is LOW, classify as needs-primary-research and SKIP — select a higher-feasibility question instead. Do not burn expert iterations on questions that require lab work or site visits to answer.
 
 ## Instructions
 1. Analyse the open questions against the selection criteria
@@ -142,8 +152,19 @@ export async function assembleHandoffIntegrationPrompt(
 ): Promise<string> {
   const findings = await readFindings(projectDir);
   const questions = await readQuestions(projectDir);
+  const counts = findingCounts(findings);
+  const goal = await safeRead(path.join(projectDir, "goal.md"));
 
   const handoffJson = JSON.stringify(handoff, null, 2);
+
+  // Exhaustion reason context
+  const exhaustionContext = handoff.exhaustionReason
+    ? `\nExhaustion reason: **${handoff.exhaustionReason}** (${
+        handoff.exhaustionReason === "data-gap" ? "data genuinely doesn't exist in public sources" :
+        handoff.exhaustionReason === "strategy-limit" ? "search strategy may need rethinking" :
+        "infrastructure/timeout failure"
+      })`
+    : "";
 
   return `You are the SEA Conductor. Validate and integrate an expert's research handoff into the knowledge store.
 
@@ -153,10 +174,11 @@ Your working directory is: ${projectDir}
 \`\`\`json
 ${handoffJson}
 \`\`\`
+${exhaustionContext}
 
-## Current Knowledge Store
-- Findings: ${findings.length} total (${findings.filter((f) => f.status === "verified").length} verified, ${findings.filter((f) => f.status === "provisional").length} provisional)
-- Questions: ${questions.length} total (${questions.filter((q) => q.status === "open").length} open)
+## Current Knowledge Store (computed from findings.jsonl)
+- Findings: ${counts.total} total (${counts.verified} verified, ${counts.provisional} provisional, ${counts.refuted} refuted, ${counts.superseded} superseded)
+- Questions: ${questions.length} total (${questions.filter((q) => q.status === "open").length} open, ${questions.filter((q) => q.status === "resolved").length} resolved)
 
 ## Instructions
 
@@ -169,7 +191,7 @@ ${handoff.status === "crashed" ? `### 1b. Infrastructure Crash
 This dispatch crashed (all inner iterations failed with non-zero exit codes). This is an infrastructure failure, NOT a content signal. Do NOT create an exhaustion-as-finding. The question remains open for re-dispatch once the infrastructure issue is resolved.
 ` : ""}${handoff.status === "exhausted" ? `### 1b. Exhaustion-as-Finding
 This dispatch exhausted — the negative result IS knowledge. Create a synthetic finding:
-- ID: F${String(findings.length + 1).padStart(3, "0")}
+- ID: F${String(counts.total + 1).padStart(3, "0")}
 - tag: "DERIVED"
 - claim: Describe what search space was covered and what specific data was sought but not found
 - source: null
@@ -178,7 +200,7 @@ This dispatch exhausted — the negative result IS knowledge. Create a synthetic
 - This prevents future dispatches from re-investigating the same gap
 ` : ""}### 2. Integrate findings into the knowledge store
 For each finding in the handoff:
-- Assign a proper sequential ID (next after F${String(findings.length).padStart(3, "0")})
+- Assign a proper sequential ID (next after F${String(counts.total).padStart(3, "0")})
 - Append to knowledge/findings.jsonl
 - If a finding confirms an existing provisional finding, update the existing one to "verified"
 - If a finding contradicts an existing finding, flag both
@@ -195,8 +217,18 @@ For each new question discovered:
 
 ### 5. Update summary
 - Rewrite knowledge/summary.md (max 2KB) to reflect the new state
+- IMPORTANT: Compute finding counts from actual knowledge/findings.jsonl, not from memory. Read the file and count statuses.
 
-### 6. Report
+### 6. Goal Achievement Check
+Read goal.md and check each success criterion:
+${truncate(goal, 1000)}
+
+At the end of the summary, add a section:
+\`## Goal Progress\`
+For each success criterion, state: MET (with supporting finding IDs), PARTIAL (what's missing), or NOT MET.
+If ALL criteria are MET, add: **⚠ PROJECT GOAL FULLY MET — consider stopping.**
+
+### 7. Report
 After integration, output a brief integration report:
 - Findings added: N
 - Findings that confirmed existing: N
@@ -240,11 +272,13 @@ export async function assembleConductorMetaPrompt(
     // no projects dir
   }
 
+  const conductorLines = conductor.split("\n").length;
+
   return `You are the SEA meta-evolution agent. Improve the SEA Conductor itself.
 
 Your working directory is: ${SEA_ROOT}
 
-## Current Conductor
+## Current Conductor (${conductorLines} lines)
 ${conductor}
 
 ## Integrity Principles
@@ -266,5 +300,10 @@ ${allLineage.length > 0 ? allLineage.join("\n\n") : "No lineage yet."}
 5. Propose specific improvements to CLAUDE.md
 6. Do NOT modify the "Safety Rails" section — it is immutable
 7. Write the updated CLAUDE.md (the versioner will preserve the old one)
+
+## CONDUCTOR SIZE BUDGET
+CLAUDE.md is currently ${conductorLines} lines. The hard limit is 150 lines.
+${conductorLines > 120 ? `\n⚠ CONSOLIDATION REQUIRED (${conductorLines} > 120 lines). Before adding ANY new content:\n- Remove resolved infrastructure debt items\n- Move dispatch pattern observations to a separate file (NOT loaded into agent context)\n- Merge overlapping rules\n- Remove pipeline-mode-only rules if no active pipeline-mode projects exist\n- Every line must earn its place — cut observational notes that don't change behavior` : ""}
+${conductorLines > 150 ? `\n🛑 OVER LIMIT. You MUST reduce to ≤150 lines. No new content until consolidated.` : ""}
 `;
 }

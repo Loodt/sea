@@ -153,6 +153,8 @@ export type ExpertStepType =
 
 export type AllStepType = StepType | ConductorStepType | ExpertStepType;
 
+export type ExhaustionReason = "data-gap" | "strategy-limit" | "infrastructure";
+
 export interface ExpertHandoff {
   questionId: string;
   status: "answered" | "killed" | "narrowed" | "exhausted" | "crashed";
@@ -162,6 +164,7 @@ export interface ExpertHandoff {
   summary: string;
   iterationsRun: number;
   convergenceAchieved: boolean;
+  exhaustionReason?: ExhaustionReason;
 }
 
 export interface ExpertConfig {
@@ -228,6 +231,7 @@ export interface ConductorMetric {
   newQuestionsCreated: number;
   innerIterationsRun: number;
   timestamp: string;
+  exhaustionReason?: ExhaustionReason;
 }
 
 /** Hard limits per conductor/expert step type — chars, not tokens. */

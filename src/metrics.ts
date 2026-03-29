@@ -128,6 +128,7 @@ export async function parseScoresFromFile(
 
 /**
  * Append a score to the project's scores.jsonl file.
+ * Deduplicates by iteration number — skips if already present.
  */
 export async function appendScore(
   projectDir: string,
@@ -139,6 +140,17 @@ export async function appendScore(
 
   try {
     const existing = await readFile(filePath, "utf-8");
+    // Deduplication: skip if this iteration already has a score
+    const lines = existing.trim().split("\n").filter(Boolean);
+    const alreadyLogged = lines.some((line) => {
+      try {
+        const entry = JSON.parse(line);
+        return entry.iteration === score.iteration;
+      } catch {
+        return false;
+      }
+    });
+    if (alreadyLogged) return;
     await writeFile(filePath, existing + JSON.stringify(score) + "\n", "utf-8");
   } catch {
     await writeFile(filePath, JSON.stringify(score) + "\n", "utf-8");

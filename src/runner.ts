@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
 export interface RunResult {
@@ -11,8 +10,7 @@ export interface RunResult {
 
 /**
  * Spawn a `claude -p` session with the given prompt.
- * Writes prompt to a temp file and pipes it via stdin to avoid shell escaping issues.
- * Each session gets a fresh context window.
+ * Pipes prompt via stdin. Each session gets a fresh context window.
  */
 export async function runClaudeSession(
   prompt: string,
@@ -20,11 +18,6 @@ export async function runClaudeSession(
   opts?: { timeoutMs?: number }
 ): Promise<RunResult> {
   const timeoutMs = opts?.timeoutMs ?? 600_000; // 10 min default
-
-  // Write prompt to temp file to avoid shell escaping issues with long prompts
-  const tempDir = await mkdtemp(path.join(tmpdir(), "sea-"));
-  const promptFile = path.join(tempDir, "prompt.txt");
-  await writeFile(promptFile, prompt, "utf-8");
 
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -49,12 +42,10 @@ export async function runClaudeSession(
     });
 
     child.on("error", (err) => {
-      rm(tempDir, { recursive: true }).catch(() => {});
       reject(err);
     });
 
     child.on("close", (code) => {
-      rm(tempDir, { recursive: true }).catch(() => {});
       resolve({ stdout, stderr, exitCode: code ?? 1 });
     });
 

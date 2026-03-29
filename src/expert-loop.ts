@@ -4,6 +4,15 @@ import { runAndTrace } from "./runner.js";
 import { readSummary, readFindings, readQuestions } from "./knowledge.js";
 import type { ExpertConfig, ExpertHandoff, Finding, Question } from "./types.js";
 
+/** Structured state passed between inner iterations (replaces crude 3KB truncation). */
+interface IterationState {
+  findingsSoFar: string[];
+  searchesCompleted: string[];
+  currentHypothesis: string;
+  blockers: string[];
+  progressSummary: string;
+}
+
 /**
  * Run the expert inner loop: iterate on a single question until convergence.
  * Each inner iteration is a single claude -p session that plans, researches, and synthesizes.
@@ -13,17 +22,25 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
   await mkdir(config.expertDir, { recursive: true });
 
   let priorOutput = "";
+  let priorState: IterationState | null = null;
   let lastHandoff: ExpertHandoff | null = null;
   let bestSuccessfulOutput = "";
   let bestSuccessfulLength = 0;
   let successfulIterCount = 0;
+  let consecutiveCrashes = 0;
 
   for (let innerIter = 1; innerIter <= config.maxIterations; innerIter++) {
     const iterStr = String(innerIter).padStart(2, "0");
     console.log(`      Inner iteration ${innerIter}/${config.maxIterations}...`);
 
+    // Crash circuit-breaker: stop after 2 consecutive crashes
+    if (consecutiveCrashes >= 2 && innerIter > 2) {
+      console.log(`      ⚠ ${consecutiveCrashes} consecutive crashes — stopping early`);
+      return buildForcedHandoff(config, bestSuccessfulOutput, innerIter - 1, successfulIterCount === 0);
+    }
+
     // Assemble and run
-    const prompt = await assembleExpertPrompt(config, innerIter, priorOutput);
+    const prompt = await assembleExpertPrompt(config, innerIter, priorOutput, priorState);
     const result = await runAndTrace(
       prompt,
       config.projectDir,
@@ -34,8 +51,11 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
     const isCrash = result.exitCode !== 0;
 
     if (isCrash) {
-      console.log(`      ⚠ Expert iteration ${innerIter} exited with code ${result.exitCode}`);
+      consecutiveCrashes++;
+      const stderrSnippet = result.stderr ? result.stderr.trim().slice(-200) : "";
+      console.log(`      ⚠ Expert iteration ${innerIter} exited with code ${result.exitCode}${stderrSnippet ? ` — ${stderrSnippet.split("\n").pop()}` : ""}`);
     } else {
+      consecutiveCrashes = 0;
       successfulIterCount++;
       // Track best successful output for forced handoff (use highest-content iteration)
       if (result.stdout.length > bestSuccessfulLength) {
@@ -62,6 +82,7 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
 
     if (parsed.handoff) {
       lastHandoff = parsed.handoff;
+      lastHandoff.findings = validateFindingSources(lastHandoff.findings);
 
       if (parsed.converged) {
         console.log(`      ✓ Expert converged: ${parsed.handoff.status}`);
@@ -72,7 +93,8 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
       }
     }
 
-    // Carry forward a truncated version for next iteration's context
+    // Extract structured state for next iteration (replaces crude truncation)
+    priorState = extractIterationState(result.stdout);
     priorOutput = truncate(result.stdout, 3000);
   }
 
@@ -98,32 +120,45 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
 }
 
 /**
+ * Validate finding sources: [SOURCE] findings without URLs get downgraded to [ESTIMATED].
+ */
+function validateFindingSources(findings: Finding[]): Finding[] {
+  let downgraded = 0;
+  const validated = findings.map((f) => {
+    if (f.tag === "SOURCE" && (!f.source || f.source === "null")) {
+      downgraded++;
+      return { ...f, tag: "ESTIMATED" as Finding["tag"] };
+    }
+    return f;
+  });
+  if (downgraded > 0) {
+    console.log(`      ℹ Downgraded ${downgraded} [SOURCE] findings to [ESTIMATED] (missing URL)`);
+  }
+  return validated;
+}
+
+/**
  * Assemble the expert's iteration prompt.
- * Includes: persona, question, relevant findings, prior output, convergence instructions.
  */
 async function assembleExpertPrompt(
   config: ExpertConfig,
   innerIter: number,
-  priorOutput: string
+  priorOutput: string,
+  priorState: IterationState | null
 ): Promise<string> {
-  // Read current knowledge state (compact)
-  const summary = await readSummary(config.projectDir);
-
-  // Build the relevant findings context
-  const findingsContext = config.relevantFindings.length > 0
-    ? config.relevantFindings
-        .map((f) => `- ${f.id}: [${f.tag}] ${f.claim} (${f.status}, confidence: ${f.confidence})`)
-        .join("\n")
-    : "(No relevant findings provided)";
-
-  const priorSection = priorOutput
-    ? `## Prior Iteration Output (truncated)\n${priorOutput}`
-    : "(First iteration — no prior output)";
-
   const isFirstIter = innerIter === 1;
   const isFinalIter = innerIter === config.maxIterations;
 
-  return `You are a research expert. Follow your persona instructions precisely.
+  // First iteration: full context. Later iterations: structured state + delta only.
+  if (isFirstIter) {
+    const summary = await readSummary(config.projectDir);
+    const findingsContext = config.relevantFindings.length > 0
+      ? config.relevantFindings
+          .map((f) => `- ${f.id}: [${f.tag}] ${f.claim} (${f.status}, confidence: ${f.confidence})`)
+          .join("\n")
+      : "(No relevant findings provided)";
+
+    return `You are a research expert. Follow your persona instructions precisely.
 
 Your working directory is: ${config.projectDir}
 
@@ -134,9 +169,8 @@ ${config.persona}
 ${config.question}
 Question ID: ${config.questionId}
 
-## ITERATION ${innerIter} of ${config.maxIterations}
-${isFirstIter ? "This is your FIRST iteration. Start with Stage 1 of your workflow (fast-kill check)." : ""}
-${isFinalIter ? "This is your FINAL iteration. You MUST produce a HANDOFF block regardless of convergence." : ""}
+## ITERATION 1 of ${config.maxIterations}
+This is your FIRST iteration. Start with Stage 1 of your workflow (fast-kill check).
 
 ## CURRENT KNOWLEDGE SUMMARY
 ${summary || "(No prior knowledge in the store)"}
@@ -144,30 +178,78 @@ ${summary || "(No prior knowledge in the store)"}
 ## RELEVANT FINDINGS
 ${findingsContext}
 
-${priorSection}
-
 ## CONVERGENCE CRITERIA
 ${config.convergenceCriteria}
 
 ## INSTRUCTIONS
-1. Follow your persona's staged workflow. ${isFirstIter ? "Begin with the fast-kill check." : "Continue from where the prior iteration left off."}
+1. Follow your persona's staged workflow. Begin with the fast-kill check.
 2. Use web search and web fetch to gather evidence. Tag every claim with its epistemic basis.
 3. After synthesizing, CHECK your key findings:
    - Does each finding have a source URL or derivation method?
    - Could any finding be wrong? What would that mean?
    - Are there contradictions with existing knowledge?
 4. Write findings incrementally to knowledge/findings.jsonl (append, don't overwrite):
-   Each line: {"id": "F{NNN}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": ${innerIter}, "status": "provisional", "verifiedAt": null, "supersededBy": null}
+   Each line: {"id": "F{NNN}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": 1, "status": "provisional", "verifiedAt": null, "supersededBy": null}
    Use IDs starting from F901 to avoid collision with existing findings (the conductor will reassign IDs).
 5. Update knowledge/questions.jsonl if any open questions are resolved by your findings.
 6. Check convergence against your criteria. If you can determine a status (answered/killed/narrowed), include the HANDOFF block.
-7. ${isFinalIter ? "You MUST include a HANDOFF block — use status 'exhausted' if you haven't converged." : "If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section."}
+7. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.
 
 ## HANDOFF FORMAT (include when converged or on final iteration)
 \`\`\`json
 {
   "questionId": "${config.questionId}",
   "status": "answered|killed|narrowed|exhausted",
+  "exhaustionReason": "data-gap|strategy-limit|infrastructure (only if status is exhausted)",
+  "findings": [{"id": "F9XX", "claim": "...", "tag": "SOURCE", "source": "url", "confidence": 0.8, "domain": "..."}],
+  "questionUpdates": [{"id": "QXXX", "status": "resolved", "resolvedBy": "F9XX"}],
+  "newQuestions": [{"question": "...", "priority": "high", "domain": "...", "context": "..."}],
+  "summary": "3-5 sentence summary",
+  "iterationsRun": 1,
+  "convergenceAchieved": true
+}
+\`\`\`
+`;
+  }
+
+  // Subsequent iterations: leaner prompt with structured state
+  const stateSection = priorState
+    ? `## STATE FROM PRIOR ITERATION
+- **Progress:** ${priorState.progressSummary}
+- **Findings so far:** ${priorState.findingsSoFar.length > 0 ? priorState.findingsSoFar.join("; ") : "none yet"}
+- **Searches completed:** ${priorState.searchesCompleted.length > 0 ? priorState.searchesCompleted.join("; ") : "none"}
+- **Current hypothesis:** ${priorState.currentHypothesis || "none formed"}
+- **Blockers:** ${priorState.blockers.length > 0 ? priorState.blockers.join("; ") : "none"}`
+    : `## PRIOR ITERATION OUTPUT (truncated)\n${priorOutput}`;
+
+  return `You are a research expert. Continue your investigation.
+
+Your working directory is: ${config.projectDir}
+
+## YOUR PERSONA (refer to full persona from iteration 1 — same question, same workflow)
+Question: ${config.question}
+Question ID: ${config.questionId}
+
+## ITERATION ${innerIter} of ${config.maxIterations}
+${isFinalIter ? "This is your FINAL iteration. You MUST produce a HANDOFF block regardless of convergence." : "Continue from where the prior iteration left off."}
+
+${stateSection}
+
+## CONVERGENCE CRITERIA
+${config.convergenceCriteria}
+
+## INSTRUCTIONS
+1. Continue your persona's staged workflow from where the prior iteration stopped.
+2. Use web search and web fetch to gather evidence. Tag every claim: [SOURCE: url], [DERIVED: method], [ESTIMATED: basis], [ASSUMED], [UNKNOWN].
+3. Write new findings to knowledge/findings.jsonl (append, F9XX IDs).
+4. Check convergence. ${isFinalIter ? "You MUST include a HANDOFF block — use 'exhausted' if not converged." : "Include HANDOFF if converged, otherwise end with NEXT ITERATION PLAN."}
+
+## HANDOFF FORMAT
+\`\`\`json
+{
+  "questionId": "${config.questionId}",
+  "status": "answered|killed|narrowed|exhausted",
+  "exhaustionReason": "data-gap|strategy-limit|infrastructure (only if status is exhausted)",
   "findings": [{"id": "F9XX", "claim": "...", "tag": "SOURCE", "source": "url", "confidence": 0.8, "domain": "..."}],
   "questionUpdates": [{"id": "QXXX", "status": "resolved", "resolvedBy": "F9XX"}],
   "newQuestions": [{"question": "...", "priority": "high", "domain": "...", "context": "..."}],
@@ -249,6 +331,7 @@ function tryParseHandoff(
         summary: parsed.summary ?? "",
         iterationsRun: parsed.iterationsRun ?? innerIter,
         convergenceAchieved: parsed.convergenceAchieved ?? false,
+        exhaustionReason: parsed.exhaustionReason ?? undefined,
       };
     }
     return null;
@@ -281,6 +364,18 @@ function buildForcedHandoff(
       ? "All expert iterations crashed — infrastructure failure, not content exhaustion. Question remains open for re-dispatch."
       : "Expert completed without producing a structured handoff.");
 
+  // Classify exhaustion reason
+  let exhaustionReason: ExpertHandoff["exhaustionReason"];
+  if (allCrashed) {
+    exhaustionReason = "infrastructure";
+  } else if (bestOutput.length < 500) {
+    exhaustionReason = "infrastructure";
+  } else if (/no\s+(data|published|study|measurement|result)|does not exist|not\s+found/i.test(bestOutput)) {
+    exhaustionReason = "data-gap";
+  } else {
+    exhaustionReason = "strategy-limit";
+  }
+
   return {
     questionId: config.questionId,
     status: allCrashed ? "crashed" : "exhausted",
@@ -290,7 +385,67 @@ function buildForcedHandoff(
     summary,
     iterationsRun,
     convergenceAchieved: false,
+    exhaustionReason,
   };
+}
+
+// ── Iteration State Extraction ──
+
+/**
+ * Extract structured state from an expert iteration's output.
+ * This replaces crude 3KB truncation with clean context for the next iteration.
+ */
+function extractIterationState(output: string): IterationState {
+  const lines = output.split("\n");
+  const state: IterationState = {
+    findingsSoFar: [],
+    searchesCompleted: [],
+    currentHypothesis: "",
+    blockers: [],
+    progressSummary: "",
+  };
+
+  // Extract findings (lines with epistemic tags)
+  for (const line of lines) {
+    if (/\[(SOURCE|DERIVED|ESTIMATED)/.test(line) && line.trim().length > 30) {
+      const clean = line.trim().replace(/^[-*]\s*/, "").slice(0, 150);
+      if (state.findingsSoFar.length < 10) state.findingsSoFar.push(clean);
+    }
+  }
+
+  // Extract searches completed (web_search patterns)
+  const searchMatches = output.match(/(?:searching for|web_search|query)[:\s]+"([^"]+)"/gi);
+  if (searchMatches) {
+    state.searchesCompleted = searchMatches.slice(0, 10).map((m) =>
+      m.replace(/^.*?["']/, "").replace(/["']$/, "").slice(0, 80)
+    );
+  }
+
+  // Extract hypothesis/conclusion (look for verdict, conclusion, hypothesis lines)
+  for (const line of lines) {
+    if (/verdict|conclusion|hypothesis|bottom.line|key.find/i.test(line) && line.trim().length > 30) {
+      state.currentHypothesis = line.trim().replace(/^[-*#>\d.]+\s*/, "").replace(/\*\*/g, "").slice(0, 200);
+      break;
+    }
+  }
+
+  // Extract blockers (no data, unknown, gap patterns)
+  for (const line of lines) {
+    if (/no\s+(data|published|study|measurement)|gap|blocker|\[UNKNOWN\]/i.test(line) && line.trim().length > 20) {
+      const clean = line.trim().replace(/^[-*]\s*/, "").slice(0, 120);
+      if (state.blockers.length < 5) state.blockers.push(clean);
+    }
+  }
+
+  // Extract next iteration plan if present
+  const nextPlanMatch = output.match(/NEXT ITERATION PLAN[\s\S]*$/i);
+  if (nextPlanMatch) {
+    state.progressSummary = nextPlanMatch[0].trim().split("\n").slice(0, 5).join(" ").slice(0, 300);
+  } else {
+    state.progressSummary = `${state.findingsSoFar.length} findings, ${state.searchesCompleted.length} searches completed`;
+  }
+
+  return state;
 }
 
 // ── Helpers ──

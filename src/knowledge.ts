@@ -216,3 +216,69 @@ export function informationGain(
   ).length;
   return { newFindings, resolvedQuestions, contradictions };
 }
+
+// ── Provisional Finding Graduation ──
+
+/**
+ * Auto-graduate provisional findings that meet all criteria:
+ * - confidence >= 0.85
+ * - tag === "SOURCE" and source URL is non-null
+ * - created >= staleAfter iterations ago
+ * - not contradicted by any refuted finding
+ * Returns count of graduated findings.
+ */
+export async function graduateFindings(
+  projectDir: string,
+  currentIteration: number,
+  staleAfter: number = 3
+): Promise<number> {
+  const findings = await readFindings(projectDir);
+  const refutedClaims = new Set(
+    findings.filter((f) => f.status === "refuted").map((f) => f.supersededBy)
+  );
+
+  let graduated = 0;
+  let changed = false;
+
+  for (const f of findings) {
+    if (
+      f.status === "provisional" &&
+      f.confidence >= 0.85 &&
+      f.tag === "SOURCE" &&
+      f.source &&
+      f.source !== "null" &&
+      (currentIteration - f.iteration) >= staleAfter &&
+      !refutedClaims.has(f.id)
+    ) {
+      f.status = "verified";
+      f.verifiedAt = currentIteration;
+      graduated++;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await writeJsonl(findingsPath(projectDir), findings);
+  }
+
+  return graduated;
+}
+
+/**
+ * Compute accurate counts from findings.jsonl (not from summary.md).
+ */
+export function findingCounts(findings: Finding[]): {
+  total: number;
+  verified: number;
+  provisional: number;
+  refuted: number;
+  superseded: number;
+} {
+  return {
+    total: findings.length,
+    verified: findings.filter((f) => f.status === "verified").length,
+    provisional: findings.filter((f) => f.status === "provisional").length,
+    refuted: findings.filter((f) => f.status === "refuted").length,
+    superseded: findings.filter((f) => f.status === "superseded").length,
+  };
+}

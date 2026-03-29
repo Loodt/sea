@@ -4,7 +4,7 @@ import { createExpert } from "./expert-factory.js";
 import { runExpertLoop } from "./expert-loop.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
-import { readFindings, readQuestions } from "./knowledge.js";
+import { readFindings, readQuestions, graduateFindings } from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
   assembleHandoffIntegrationPrompt,
@@ -81,9 +81,20 @@ export async function runConductorIteration(
   console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
   const handoff = await runExpertLoop(expertConfig);
 
-  // Step 4: Integrate handoff
-  console.log("\n📥 INTEGRATE — merging results into knowledge store...");
-  const delta = await integrateHandoff(projectDir, handoff, cIter);
+  // Step 4: Integrate handoff (skip for zero-finding crashes)
+  let delta = { findingsAdded: 0, questionsAdded: 0 };
+  if (handoff.status === "crashed" && handoff.findings.length === 0) {
+    console.log("\n📥 INTEGRATE — skipped (crash with no findings)");
+  } else {
+    console.log("\n📥 INTEGRATE — merging results into knowledge store...");
+    delta = await integrateHandoff(projectDir, handoff, cIter);
+  }
+
+  // Auto-graduate provisional findings
+  const graduated = await graduateFindings(projectDir, cIter);
+  if (graduated > 0) {
+    console.log(`   ✓ Auto-graduated ${graduated} provisional findings to verified`);
+  }
 
   // Print story
   await printConductorStory(projectDir, cIter, selection, handoff);
@@ -101,6 +112,7 @@ export async function runConductorIteration(
     newQuestionsCreated: delta.questionsAdded,
     innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
+    ...(handoff.exhaustionReason ? { exhaustionReason: handoff.exhaustionReason } : {}),
   });
 
   return { conductorIteration: cIter, handoff };
@@ -379,6 +391,8 @@ async function printConductorStory(
   const findings = await readFindings(projectDir);
   const questions = await readQuestions(projectDir);
   const openQs = questions.filter((q) => q.status === "open");
+  const resolvedQs = questions.filter((q) => q.status === "resolved");
+  const verifiedFindings = findings.filter((f) => f.status === "verified");
 
   const statusIcon: Record<string, string> = {
     answered: "✅",
@@ -394,12 +408,13 @@ async function printConductorStory(
 
   console.log(`\n  Question:   ${truncateLine(selection.question, width - 14)}`);
   console.log(`  Expert:     ${selection.suggestedExpertType}`);
-  console.log(`  Result:     ${statusIcon[handoff.status] || "?"} ${handoff.status} (${handoff.iterationsRun} inner iterations)`);
+  console.log(`  Result:     ${statusIcon[handoff.status] || "?"} ${handoff.status} (${handoff.iterationsRun} inner iterations)${handoff.exhaustionReason ? ` [${handoff.exhaustionReason}]` : ""}`);
 
   if (handoff.summary) {
     console.log(`\n  Summary:    ${wrapIndent(handoff.summary, 14, width - 4)}`);
   }
 
+  // Per-iteration stats
   const parts: string[] = [];
   parts.push(`Findings: ${findings.length}`);
   if (handoff.findings.length > 0) parts.push(`New: +${handoff.findings.length}`);
@@ -408,6 +423,56 @@ async function printConductorStory(
   console.log(`\n  ${parts.join("  |  ")}`);
 
   console.log(BAR.repeat(width));
+
+  // Cumulative dashboard (every 3 iterations)
+  if (conductorIteration % 3 === 0 || conductorIteration === 1) {
+    await printCumulativeDashboard(projectDir, findings, questions, conductorIteration);
+  }
+}
+
+async function printCumulativeDashboard(
+  projectDir: string,
+  findings: import("./types.js").Finding[],
+  questions: import("./types.js").Question[],
+  conductorIteration: number
+): Promise<void> {
+  const verified = findings.filter((f) => f.status === "verified").length;
+  const provisional = findings.filter((f) => f.status === "provisional").length;
+  const openQs = questions.filter((q) => q.status === "open");
+  const resolvedQs = questions.filter((q) => q.status === "resolved");
+
+  // Read goal for success criteria checking
+  const goal = await safeReadFile(path.join(projectDir, "goal.md"));
+  const summary = await safeReadFile(path.join(projectDir, "knowledge", "summary.md"));
+
+  // Read metrics for efficiency stats
+  const metricsPath = path.join(projectDir, "metrics", "conductor-metrics.jsonl");
+  let avgFindingsPerDispatch = 0;
+  let convergenceRate = 0;
+  try {
+    const raw = await readFile(metricsPath, "utf-8");
+    const entries = raw.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const totalFindings = entries.reduce((sum: number, e: { findingsAdded?: number }) => sum + (e.findingsAdded ?? 0), 0);
+    avgFindingsPerDispatch = entries.length > 0 ? totalFindings / entries.length : 0;
+    const converged = entries.filter((e: { expertStatus?: string }) => e.expertStatus === "answered" || e.expertStatus === "killed").length;
+    convergenceRate = entries.length > 0 ? (converged / entries.length) * 100 : 0;
+  } catch { /* no metrics yet */ }
+
+  console.log(`\n  ┌${"─".repeat(60)}┐`);
+  console.log(`  │ CUMULATIVE STATUS — Iteration ${conductorIteration}${" ".repeat(Math.max(0, 36 - String(conductorIteration).length))}│`);
+  console.log(`  ├${"─".repeat(60)}┤`);
+  console.log(`  │ Findings: ${String(findings.length).padEnd(6)} (${verified} verified, ${provisional} provisional)${" ".repeat(Math.max(0, 22 - String(findings.length).length - String(verified).length - String(provisional).length))}│`);
+  console.log(`  │ Questions: ${String(resolvedQs.length).padEnd(3)}/${questions.length} resolved, ${openQs.length} open${" ".repeat(Math.max(0, 30 - String(resolvedQs.length).length - String(questions.length).length - String(openQs.length).length))}│`);
+  console.log(`  │ Efficiency: ${convergenceRate.toFixed(0)}% convergence, ${avgFindingsPerDispatch.toFixed(1)} findings/dispatch${" ".repeat(Math.max(0, 23 - convergenceRate.toFixed(0).length - avgFindingsPerDispatch.toFixed(1).length))}│`);
+  console.log(`  └${"─".repeat(60)}┘`);
+}
+
+async function safeReadFile(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, "utf-8");
+  } catch {
+    return "";
+  }
 }
 
 // ── Helpers ──
