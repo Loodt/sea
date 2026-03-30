@@ -2,13 +2,20 @@ import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { runAndTrace } from "./runner.js";
 import { readSummary, readFindings, queryFindings } from "./knowledge.js";
+import { readLibrary, findMatchingExperts, hashPersona } from "./expert-library.js";
 import type { ExpertConfig, QuestionSelection, Finding } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
+/** Reuse threshold: minimum library score to attempt adaptation instead of fresh creation. */
+const REUSE_THRESHOLD = 2.0;
+
 /**
  * Create an expert persona for a specific question using the expert creation framework.
  * This is the "80% investment" — the quality of the persona determines the quality of the research.
+ *
+ * Checks the expert library first: if a high-scoring persona exists for the same
+ * question type and a similar domain, it adapts that persona instead of creating from scratch.
  */
 export async function createExpert(
   selection: QuestionSelection,
@@ -20,33 +27,29 @@ export async function createExpert(
   const expertDir = path.join(projectDir, "experts", `Q${selection.questionId}-iter-${iterStr}`);
   await mkdir(expertDir, { recursive: true });
 
-  // Assemble the expert creation prompt
-  const prompt = await assembleExpertCreationPrompt(selection, projectDir, maxExpertIterations);
+  // Check expert library for reusable personas
+  const library = await readLibrary(projectDir);
+  const candidates = findMatchingExperts(library, selection.questionType, selection.question, 3);
 
-  console.log("   Building expert persona...");
+  let persona: string | null = null;
 
-  // Run the creation session
-  const result = await runAndTrace(
-    prompt,
-    projectDir,
-    path.join(projectDir, "traces"),
-    `conductor-${iterStr}-create-expert`
-  );
-
-  if (result.exitCode !== 0) {
-    console.log(`   ⚠ Expert creation exited with code ${result.exitCode}`);
+  if (candidates.length > 0 && candidates[0].score > REUSE_THRESHOLD) {
+    const top = candidates[0];
+    const basePath = path.join(projectDir, top.personaPath);
+    const basePersona = await safeRead(basePath);
+    if (basePersona) {
+      console.log(`   \u267b Adapting existing expert (${top.expertType}, score: ${top.score.toFixed(1)})`);
+      persona = await adaptExistingPersona(basePersona, selection, projectDir, maxExpertIterations, iterStr);
+    }
   }
 
-  // Extract the persona from the output
-  const persona = extractPersonaFromOutput(result.stdout);
-
   if (!persona) {
-    throw new Error("Failed to extract expert persona from creation session output");
+    persona = await createFreshPersona(selection, projectDir, maxExpertIterations, iterStr);
   }
 
   // Save persona for auditing
   await writeFile(path.join(expertDir, "persona.md"), persona, "utf-8");
-  console.log(`   ✓ Expert persona created (${persona.split("\n").length} lines)`);
+  console.log(`   \u2713 Expert persona ready (${persona.split("\n").length} lines)`);
 
   // Select relevant findings for the expert's context
   const relevantFindings = await selectRelevantFindings(projectDir, selection, 20);
@@ -74,6 +77,89 @@ export async function createExpert(
 }
 
 /**
+ * Create a fresh persona from scratch using the full creation framework.
+ */
+async function createFreshPersona(
+  selection: QuestionSelection,
+  projectDir: string,
+  maxExpertIterations: number,
+  iterStr: string
+): Promise<string> {
+  const prompt = await assembleExpertCreationPrompt(selection, projectDir, maxExpertIterations);
+
+  console.log("   Building expert persona from scratch...");
+  const result = await runAndTrace(
+    prompt,
+    projectDir,
+    path.join(projectDir, "traces"),
+    `conductor-${iterStr}-create-expert`
+  );
+
+  if (result.exitCode !== 0) {
+    console.log(`   \u26a0 Expert creation exited with code ${result.exitCode}`);
+  }
+
+  const persona = extractPersonaFromOutput(result.stdout);
+  if (!persona) {
+    throw new Error("Failed to extract expert persona from creation session output");
+  }
+  return persona;
+}
+
+/**
+ * Adapt an existing high-scoring persona for a new question.
+ * This is cheaper than creating from scratch — the persona structure already exists.
+ */
+async function adaptExistingPersona(
+  basePersona: string,
+  selection: QuestionSelection,
+  projectDir: string,
+  maxExpertIterations: number,
+  iterStr: string
+): Promise<string> {
+  const summary = await readSummary(projectDir);
+  const prompt = `You are an expert persona adaptation agent. You have a proven expert persona that performed well on a similar question type. Adapt it for a new question.
+
+## Base Persona (proven, high-scoring)
+${basePersona}
+
+## New Question
+QUESTION: ${selection.question}
+QUESTION_ID: ${selection.questionId}
+QUESTION_TYPE: ${selection.questionType}
+SUGGESTED_EXPERT_TYPE: ${selection.suggestedExpertType}
+MAX_ITERATIONS: ${maxExpertIterations}
+
+## Current Knowledge
+${summary || "(No prior findings)"}
+
+## Instructions
+1. Keep the structural framework (6 sections) from the base persona
+2. Adapt domain-specific knowledge, mental models, and convergence criteria to the new question
+3. Preserve anti-hallucination rules and workflow stages
+4. Update the identity to match the suggested expert type
+5. Keep the persona under 60 lines
+
+Wrap the adapted persona between ===PERSONA_START=== and ===PERSONA_END=== delimiters.
+`;
+
+  const result = await runAndTrace(
+    prompt,
+    projectDir,
+    path.join(projectDir, "traces"),
+    `conductor-${iterStr}-adapt-expert`
+  );
+
+  const persona = extractPersonaFromOutput(result.stdout);
+  if (!persona) {
+    // Adaptation failed — fall back to fresh creation
+    console.log("   \u26a0 Adaptation failed, falling back to fresh creation");
+    return createFreshPersona(selection, projectDir, maxExpertIterations, iterStr);
+  }
+  return persona;
+}
+
+/**
  * Assemble the prompt for the expert creation claude -p session.
  */
 async function assembleExpertCreationPrompt(
@@ -97,8 +183,9 @@ async function assembleExpertCreationPrompt(
     ? relevantFindings.map((f) => `- ${f.id}: [${f.tag}] ${f.claim} (confidence: ${f.confidence}, status: ${f.status})`).join("\n")
     : "(No directly relevant findings yet)";
 
-  // Load failure patterns
+  // Load failure and success patterns
   const failurePatterns = await loadFailurePatterns();
+  const successPatterns = await loadSuccessPatterns();
 
   return `${framework}
 
@@ -123,6 +210,9 @@ ${findingsText}
 
 FAILURE PATTERNS:
 ${failurePatterns || "(None documented yet)"}
+
+SUCCESS PATTERNS:
+${successPatterns || "(None recorded yet)"}
 
 MAX_ITERATIONS: ${maxExpertIterations}
 
@@ -233,6 +323,28 @@ async function safeRead(filePath: string): Promise<string> {
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return text.slice(0, maxChars) + "\n...(truncated)";
+}
+
+async function loadSuccessPatterns(): Promise<string> {
+  const dir = path.join(SEA_ROOT, "success-patterns");
+  try {
+    const files = await readdir(dir);
+    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    if (mdFiles.length === 0) return "";
+
+    const patterns: string[] = [];
+    for (const file of mdFiles) {
+      const content = await safeRead(path.join(dir, file));
+      const stratMatch = content.match(/## Strategy\n+([\s\S]*?)(?=\n##)/);
+      if (stratMatch) {
+        const strat = stratMatch[1].trim().split("\n")[0];
+        patterns.push(`- **${file.replace(".md", "")}:** ${strat}`);
+      }
+    }
+    return patterns.join("\n");
+  } catch {
+    return "";
+  }
 }
 
 async function loadFailurePatterns(): Promise<string> {

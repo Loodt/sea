@@ -106,6 +106,7 @@ export interface LoopConfig {
   metaEveryN: number;
   regressionThreshold: number;
   regressionWindow: number;
+  evaluateModel?: string; // Use a different model for evaluate step (Axiom 1 separation)
 }
 
 export const DEFAULT_LOOP_CONFIG: LoopConfig = {
@@ -114,6 +115,7 @@ export const DEFAULT_LOOP_CONFIG: LoopConfig = {
   metaEveryN: 5,
   regressionThreshold: 0.15,
   regressionWindow: 3,
+  evaluateModel: "sonnet", // Axiom 1: different model for evaluate step
 };
 
 // ── Context Monitoring ──
@@ -213,6 +215,7 @@ export interface ConductorConfig {
   maxConductorIterations: number;
   maxExpertIterations: number;
   metaEveryN: number;
+  evaluateModel?: string; // Use a different model for evaluate step (Axiom 1 separation)
 }
 
 export const DEFAULT_CONDUCTOR_CONFIG: ConductorConfig = {
@@ -245,6 +248,51 @@ export const CONDUCTOR_CONTEXT_BUDGETS: Record<ConductorStepType | ExpertStepTyp
   "expert-synthesize": 48_000,
   "expert-converge": 24_000,
 };
+
+// ── Observability ──
+
+export interface Span {
+  id: string;
+  step: string;
+  parentId?: string;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+  promptChars: number;
+  outputChars: number;
+  promptTokensEst: number;
+  outputTokensEst: number;
+  exitCode: number;
+  findingsProduced: number;
+  metadata?: Record<string, unknown>;
+}
+
+// ── Evolution ──
+
+export interface EvolutionCandidate {
+  id: number;
+  changeType: "behavioral" | "strategic" | "no-change" | "exploratory";
+  description: string;
+  hypothesis: string;
+  noveltyScore: number;
+  performanceScore: number;
+  compositeScore: number;
+}
+
+// ── Expert Library ──
+
+export interface LibraryEntry {
+  personaHash: string;
+  questionType: QuestionType;
+  domain: string;
+  expertType: string;
+  avgIG: number;
+  dispatches: number;
+  lastUsed: string;
+  personaPath: string;
+  score: number;
+  status: "active" | "retired";
+}
 
 // ── Utilities ──
 

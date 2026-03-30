@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { runAndTrace } from "./runner.js";
+import { appendSpan } from "./metrics.js";
 import { readSummary, readFindings, readQuestions } from "./knowledge.js";
 import type { ExpertConfig, ExpertHandoff, Finding, Question } from "./types.js";
 
@@ -47,6 +48,23 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
       config.expertDir,
       `expert-iter-${iterStr}`
     );
+
+    // Emit structured span
+    const findingsInOutput = (result.stdout.match(/\[(SOURCE|DERIVED|ESTIMATED)/g) || []).length;
+    await appendSpan(config.projectDir, {
+      id: `expert-${config.questionId}-iter-${iterStr}`,
+      step: "expert-research",
+      parentId: `dispatch-${config.questionId}`,
+      startTime: result.startTime,
+      endTime: result.endTime,
+      durationMs: result.durationMs,
+      promptChars: prompt.length,
+      outputChars: result.stdout.length,
+      promptTokensEst: Math.ceil(prompt.length / 4),
+      outputTokensEst: Math.ceil(result.stdout.length / 4),
+      exitCode: result.exitCode,
+      findingsProduced: findingsInOutput,
+    });
 
     const isCrash = result.exitCode !== 0;
 

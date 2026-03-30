@@ -30,8 +30,13 @@ program
 program
   .command("run <project>")
   .description("Run a single iteration (plan → research → synthesize → evaluate → evolve → summarize)")
-  .action(async (project: string) => {
-    await runIteration(project);
+  .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
+  .action(async (project: string, opts) => {
+    const config: LoopConfig = {
+      ...DEFAULT_LOOP_CONFIG,
+      ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
+    };
+    await runIteration(project, config);
   });
 
 // ── sea loop <project> ──
@@ -41,12 +46,14 @@ program
   .option("-c, --cooldown <seconds>", "Cooldown between iterations", "30")
   .option("-m, --max <iterations>", "Maximum iterations", "Infinity")
   .option("--meta-every <n>", "Run meta-evolution every N iterations", "5")
+  .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
   .action(async (project: string, opts) => {
     const config: LoopConfig = {
       ...DEFAULT_LOOP_CONFIG,
       cooldownMs: parseFloat(opts.cooldown) * 1000,
       maxIterations: opts.max === "Infinity" ? Infinity : parseInt(opts.max, 10),
       metaEveryN: parseInt(opts.metaEvery, 10),
+      ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runLoop(project, config);
   });
@@ -59,6 +66,7 @@ program
   .option("-m, --max <iterations>", "Maximum conductor iterations", "Infinity")
   .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
   .option("--meta-every <n>", "Run conductor meta every N iterations", "3")
+  .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
   .action(async (project: string, opts) => {
     const config: ConductorConfig = {
       ...DEFAULT_CONDUCTOR_CONFIG,
@@ -67,6 +75,7 @@ program
         opts.max === "Infinity" ? Infinity : parseInt(opts.max, 10),
       maxExpertIterations: parseInt(opts.expertMax, 10),
       metaEveryN: parseInt(opts.metaEvery, 10),
+      ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runConductorLoop(project, config);
   });
@@ -76,10 +85,12 @@ program
   .command("dispatch <project>")
   .description("Run a single conductor iteration (select question, create expert, dispatch, integrate)")
   .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
+  .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
   .action(async (project: string, opts) => {
     const config: ConductorConfig = {
       ...DEFAULT_CONDUCTOR_CONFIG,
       maxExpertIterations: parseInt(opts.expertMax, 10),
+      ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runConductorIteration(project, config);
   });

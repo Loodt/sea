@@ -6,6 +6,14 @@ export interface RunResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  startTime: string;
+  endTime: string;
+  durationMs: number;
+}
+
+export interface RunOptions {
+  timeoutMs?: number;
+  model?: string; // e.g. "sonnet", "opus", "claude-sonnet-4-6"
 }
 
 /**
@@ -15,20 +23,21 @@ export interface RunResult {
 export async function runClaudeSession(
   prompt: string,
   cwd: string,
-  opts?: { timeoutMs?: number }
+  opts?: RunOptions
 ): Promise<RunResult> {
   const timeoutMs = opts?.timeoutMs ?? 600_000; // 10 min default
+  const startTime = new Date().toISOString();
+  const startMs = Date.now();
 
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      "claude",
-      ["-p", "--output-format", "text", "--dangerously-skip-permissions"],
-      {
-        cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        timeout: timeoutMs,
-      }
-    );
+    const args = ["-p", "--output-format", "text", "--dangerously-skip-permissions"];
+    if (opts?.model) args.push("--model", opts.model);
+
+    const child = spawn("claude", args, {
+      cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: timeoutMs,
+    });
 
     let stdout = "";
     let stderr = "";
@@ -46,7 +55,9 @@ export async function runClaudeSession(
     });
 
     child.on("close", (code) => {
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
+      const endTime = new Date().toISOString();
+      const durationMs = Date.now() - startMs;
+      resolve({ stdout, stderr, exitCode: code ?? 1, startTime, endTime, durationMs });
     });
 
     // Pipe the prompt via stdin
@@ -63,7 +74,7 @@ export async function runAndTrace(
   cwd: string,
   traceDir: string,
   traceName: string,
-  opts?: { timeoutMs?: number }
+  opts?: RunOptions
 ): Promise<RunResult> {
   await mkdir(traceDir, { recursive: true });
 
@@ -75,10 +86,12 @@ export async function runAndTrace(
   const traceContent = [
     `# Trace: ${traceName}`,
     ``,
-    `- Timestamp: ${new Date().toISOString()}`,
+    `- Timestamp: ${result.startTime}`,
     `- Exit code: ${result.exitCode}`,
+    `- Duration: ${result.durationMs}ms`,
     `- Prompt size: ${(promptChars / 1024).toFixed(1)}KB (${promptChars} chars, ~${estimatedTokens} tokens)`,
     `- Output size: ${(result.stdout.length / 1024).toFixed(1)}KB`,
+    opts?.model ? `- Model: ${opts.model}` : "",
     ``,
     `## Output`,
     ``,

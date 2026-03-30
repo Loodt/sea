@@ -453,8 +453,9 @@ async function assembleEvolve(
   );
   const trend = lastN(allScores, 5).map((s) => s.overall);
 
-  // Failure patterns
+  // Failure and success patterns
   const failurePatterns = await loadFailurePatterns();
+  const successPatterns = await loadSuccessPatterns();
 
   const integrity = getIntegritySnippets("evolve");
 
@@ -481,12 +482,25 @@ ${trend.length > 0 ? `## Score Trend\n${trend.join(" → ")}` : ""}
 
 ${failurePatterns ? `## Known Failure Patterns\n${failurePatterns}` : ""}
 
+${successPatterns ? `## Known Success Patterns\n${successPatterns}` : ""}
+
+## Recent Changes (for novelty assessment)
+${recentLineage.length > 0 ? recentLineage.map((e: any) => `- ${e.changeSummary}`).join("\n") : "No prior changes."}
+
 ## Instructions
 1. Check failure-patterns/ — is the issue you see already documented? If so, apply the known fix.
-2. Read the evaluations and identify the SINGLE highest-leverage improvement
-3. **Size check:** If persona exceeds 60 lines, consolidation is mandatory before any addition
-4. Propose a specific, surgical change to persona.md
-5. Explain your reasoning thoroughly (WHY this change, what evidence supports it)
+2. Read the evaluations and generate 3 CANDIDATE changes (not just 1). For each, output a JSON block:
+\`\`\`json
+{"id": N, "changeType": "behavioral|strategic|no-change|exploratory", "description": "...", "hypothesis": "...", "noveltyScore": N, "performanceScore": N, "compositeScore": N}
+\`\`\`
+   Scoring rules:
+   - performanceScore (0-10): expected impact on weakest dimension
+   - noveltyScore (0-10): distance from the "Recent Changes" above (0 = nearly identical, 10 = completely new approach)
+   - compositeScore = performanceScore * 0.7 + noveltyScore * 0.3
+${iter % 5 === 0 ? "\n   **DIVERSITY BUDGET ACTIVE:** At least ONE candidate MUST have noveltyScore >= 7 and changeType 'exploratory'. This triggers every 5th iteration to escape local optima.\n" : ""}
+3. Select the candidate with the highest compositeScore
+4. **Size check:** If persona exceeds 60 lines, consolidation is mandatory before any addition
+5. Apply the selected change to persona.md — explain your reasoning (WHY this change, what evidence supports it)
 6. Write the updated persona.md (the versioner will preserve the old one)
 7. If you discovered a new generalizable failure mode, write it to failure-patterns/
 8. Append a lineage entry to lineage/changes.jsonl:
@@ -659,6 +673,28 @@ async function loadFailurePatterns(): Promise<string> {
       }
     }
     return patterns.join("\n\n");
+  } catch {
+    return "";
+  }
+}
+
+async function loadSuccessPatterns(): Promise<string> {
+  const dir = path.join(SEA_ROOT, "success-patterns");
+  try {
+    const files = await readdir(dir);
+    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    if (mdFiles.length === 0) return "";
+
+    const patterns: string[] = [];
+    for (const file of mdFiles) {
+      const content = await safeRead(path.join(dir, file));
+      const stratMatch = content.match(/## Strategy\n+([\s\S]*?)(?=\n##)/);
+      if (stratMatch) {
+        const strat = stratMatch[1].trim().split("\n")[0];
+        patterns.push(`- **${file.replace(".md", "")}:** ${strat}`);
+      }
+    }
+    return patterns.join("\n");
   } catch {
     return "";
   }

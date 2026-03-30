@@ -11,7 +11,8 @@ import {
 } from "./metrics.js";
 import { checkAndRollback, advanceIteration } from "./safety.js";
 import { initKnowledge, readFindings, readQuestions, informationGain } from "./knowledge.js";
-import type { ProjectState, LoopConfig, PipelineStep, Score } from "./types.js";
+import { appendSpan } from "./metrics.js";
+import type { ProjectState, LoopConfig, PipelineStep, Score, Span } from "./types.js";
 import { DEFAULT_LOOP_CONFIG, padVersion } from "./types.js";
 
 const SEA_ROOT = process.cwd();
@@ -55,7 +56,7 @@ export async function runIteration(
   let score: number | null = null;
 
   for (const step of enabledSteps) {
-    const result = await runStep(step, projectName, projectDir, iter, iterStr, state);
+    const result = await runStep(step, projectName, projectDir, iter, iterStr, state, config);
 
     // After evaluate step: parse scores
     if (step.type === "evaluate") {
@@ -90,7 +91,8 @@ async function runStep(
   projectDir: string,
   iter: number,
   iterStr: string,
-  state: ProjectState
+  state: ProjectState,
+  config?: Partial<LoopConfig>
 ): Promise<string> {
   const labels: Record<string, string> = {
     plan: "📋 PLAN — creating research plan...",
@@ -104,11 +106,18 @@ async function runStep(
   console.log(labels[step.type] ?? `▶ ${step.type}...`);
 
   const prompt = await assemblePrompt(step.type, projectName);
+
+  // Axiom 1: evaluate step can use a different model
+  const runOpts = step.type === "evaluate" && config?.evaluateModel
+    ? { model: config.evaluateModel }
+    : undefined;
+
   const result = await runAndTrace(
     prompt,
     projectDir,
     path.join(projectDir, "traces"),
-    `iter-${iterStr}-${step.type}`
+    `iter-${iterStr}-${step.type}`,
+    runOpts
   );
 
   if (result.exitCode !== 0) {
@@ -116,6 +125,22 @@ async function runStep(
   } else {
     console.log(`   ✓ ${step.type} complete`);
   }
+
+  // Emit structured span
+  const findingsCount = (result.stdout.match(/\[(SOURCE|DERIVED|ESTIMATED)/g) || []).length;
+  await appendSpan(projectDir, {
+    id: `pipeline-${iterStr}-${step.type}`,
+    step: step.type,
+    startTime: result.startTime,
+    endTime: result.endTime,
+    durationMs: result.durationMs,
+    promptChars: prompt.length,
+    outputChars: result.stdout.length,
+    promptTokensEst: Math.ceil(prompt.length / 4),
+    outputTokensEst: Math.ceil(result.stdout.length / 4),
+    exitCode: result.exitCode,
+    findingsProduced: findingsCount,
+  });
 
   // Print a brief summary of what the step produced
   const brief = summarizeStepOutput(step.type, result.stdout, projectDir, iterStr);
@@ -287,7 +312,17 @@ function summarizeStepOutput(
     }
 
     case "evolve": {
-      // What changed in the persona
+      // Parse evolution candidates for novelty-pressure logging
+      const candidates = parseEvolutionCandidates(stdout);
+      if (candidates.length > 0) {
+        const maxScore = Math.max(...candidates.map((c) => c.compositeScore));
+        const parts = candidates.map((c) => {
+          const star = c.compositeScore === maxScore ? "\u2605" : " ";
+          return `${star}[${c.changeType}] "${c.description.slice(0, 40)}" (p:${c.performanceScore} n:${c.noveltyScore} c:${c.compositeScore.toFixed(1)})`;
+        });
+        return `${candidates.length} candidates: ${parts.join(" | ")}`;
+      }
+      // Fallback: what changed in the persona
       const lines = stdout.split("\n");
       for (const line of lines) {
         const t = line.trim();
@@ -313,6 +348,33 @@ function summarizeStepOutput(
     default:
       return "";
   }
+}
+
+/**
+ * Parse evolution candidates from evolve step output.
+ * Extracts JSON blocks that match the EvolutionCandidate shape.
+ */
+function parseEvolutionCandidates(text: string): import("./types.js").EvolutionCandidate[] {
+  const candidates: import("./types.js").EvolutionCandidate[] = [];
+  const jsonBlockRe = /```json\s*\n([\s\S]*?)\n\s*```/g;
+  let match: RegExpExecArray | null;
+  while ((match = jsonBlockRe.exec(text)) !== null) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      if (typeof parsed.performanceScore === "number" && typeof parsed.noveltyScore === "number") {
+        candidates.push({
+          id: parsed.id ?? candidates.length + 1,
+          changeType: parsed.changeType ?? "behavioral",
+          description: parsed.description ?? "",
+          hypothesis: parsed.hypothesis ?? "",
+          noveltyScore: parsed.noveltyScore,
+          performanceScore: parsed.performanceScore,
+          compositeScore: parsed.compositeScore ?? (parsed.performanceScore * 0.7 + parsed.noveltyScore * 0.3),
+        });
+      }
+    } catch { /* not a candidate JSON */ }
+  }
+  return candidates;
 }
 
 // ── Iteration Story ──

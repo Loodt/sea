@@ -1,6 +1,6 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
 import path from "node:path";
-import type { Score } from "./types.js";
+import type { Score, Span } from "./types.js";
 
 /**
  * Updated overall score weights (v002 conductor added processCompliance).
@@ -193,4 +193,32 @@ export function isRegressing(
 
   if (priorAvg === 0) return false;
   return (priorAvg - recentAvg) / priorAvg > threshold;
+}
+
+// ── Spans ──
+
+/**
+ * Append a structured span to metrics/spans.jsonl.
+ */
+export async function appendSpan(projectDir: string, span: Span): Promise<void> {
+  const metricsDir = path.join(projectDir, "metrics");
+  await mkdir(metricsDir, { recursive: true });
+  await appendFile(path.join(metricsDir, "spans.jsonl"), JSON.stringify(span) + "\n", "utf-8");
+}
+
+/**
+ * Read all spans for a project.
+ */
+export async function readSpans(projectDir: string): Promise<Span[]> {
+  const filePath = path.join(projectDir, "metrics", "spans.jsonl");
+  try {
+    const content = await readFile(filePath, "utf-8");
+    return content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Span);
+  } catch {
+    return [];
+  }
 }

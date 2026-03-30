@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { createExpert } from "./expert-factory.js";
 import { runExpertLoop } from "./expert-loop.js";
@@ -10,13 +10,17 @@ import {
   assembleHandoffIntegrationPrompt,
   assembleConductorMetaPrompt,
 } from "./conductor-context.js";
+import { appendSpan } from "./metrics.js";
+import { hashPersona, upsertLibraryEntry } from "./expert-library.js";
 import type {
   ConductorState,
   ConductorConfig,
   QuestionSelection,
+  ExpertConfig,
   ExpertHandoff,
   ConductorMetric,
   QuestionType,
+  Span,
 } from "./types.js";
 import { DEFAULT_CONDUCTOR_CONFIG, QUESTION_TYPE_ITERATION_CAP } from "./types.js";
 
@@ -62,9 +66,23 @@ export async function runConductorIteration(
 
   console.log(`\n━━━ Conductor Iteration ${cIter} ━━━\n`);
 
+  const dispatchStart = Date.now();
+  const dispatchStartTime = new Date().toISOString();
+
   // Step 1: Select question
   console.log("📋 SELECT — choosing highest-value question...");
+  const selectStart = Date.now();
   const selection = await selectQuestion(projectDir, cIter, state.questionsExhausted);
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-select`,
+    step: "select-question",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(selectStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - selectStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: 0, findingsProduced: 0,
+  });
   console.log(`   ✓ Selected: ${selection.questionId} — ${truncateLine(selection.question, 60)}`);
   console.log(`   Expert type: ${selection.suggestedExpertType}`);
 
@@ -75,19 +93,101 @@ export async function runConductorIteration(
   if (effectiveMaxIter < config.maxExpertIterations) {
     console.log(`   Question type "${selection.questionType}" → capped at ${effectiveMaxIter} iterations`);
   }
+  const createStart = Date.now();
   const expertConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter);
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-create`,
+    step: "create-expert",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(createStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - createStart,
+    promptChars: 0, outputChars: expertConfig.persona.length, promptTokensEst: 0,
+    outputTokensEst: Math.ceil(expertConfig.persona.length / 4),
+    exitCode: 0, findingsProduced: 0,
+  });
+
+  // Snapshot knowledge store BEFORE expert loop (experts may write directly to findings.jsonl)
+  const findingsBeforeDispatch = (await readFindings(projectDir)).length;
+  const questionsBeforeDispatch = (await readQuestions(projectDir)).length;
 
   // Step 3: Run expert loop
   console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
+  const expertStart = Date.now();
   const handoff = await runExpertLoop(expertConfig);
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-dispatch`,
+    step: "dispatch-expert",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(expertStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - expertStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: handoff.status === "crashed" ? 1 : 0,
+    findingsProduced: handoff.findings.length,
+    metadata: { status: handoff.status, iterationsRun: handoff.iterationsRun },
+  });
 
   // Step 4: Integrate handoff (skip for zero-finding crashes)
-  let delta = { findingsAdded: 0, questionsAdded: 0 };
+  const integrateStart = Date.now();
   if (handoff.status === "crashed" && handoff.findings.length === 0) {
     console.log("\n📥 INTEGRATE — skipped (crash with no findings)");
   } else {
     console.log("\n📥 INTEGRATE — merging results into knowledge store...");
-    delta = await integrateHandoff(projectDir, handoff, cIter);
+    await integrateHandoff(projectDir, handoff, cIter);
+  }
+
+  // Compute dispatch-level delta (captures findings written by expert + integration)
+  const findingsAfterDispatch = (await readFindings(projectDir)).length;
+  const questionsAfterDispatch = (await readQuestions(projectDir)).length;
+  const delta = {
+    findingsAdded: findingsAfterDispatch - findingsBeforeDispatch,
+    questionsAdded: questionsAfterDispatch - questionsBeforeDispatch,
+  };
+  if (delta.findingsAdded > 0 || delta.questionsAdded > 0) {
+    console.log(`   ✓ Dispatch delta: +${delta.findingsAdded} findings, +${delta.questionsAdded} questions`);
+  }
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-integrate`,
+    step: "integrate-handoff",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(integrateStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - integrateStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: 0, findingsProduced: delta.findingsAdded,
+  });
+
+  // Parent span for entire conductor iteration
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}`,
+    step: "conductor-iteration",
+    startTime: dispatchStartTime,
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - dispatchStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: handoff.status === "crashed" ? 1 : 0,
+    findingsProduced: delta.findingsAdded,
+    metadata: { questionId: selection.questionId, status: handoff.status },
+  });
+
+  // Update expert library with dispatch results
+  const pHash = hashPersona(expertConfig.persona);
+  const personaRelPath = path.relative(projectDir, path.join(expertConfig.expertDir, "persona.md"));
+  await upsertLibraryEntry(
+    projectDir,
+    pHash,
+    selection.questionType,
+    selection.question.slice(0, 100),
+    selection.suggestedExpertType,
+    delta.findingsAdded,
+    personaRelPath
+  );
+
+  // Record success pattern for high-IG answered dispatches
+  const SUCCESS_PATTERN_THRESHOLD = 5;
+  if (handoff.status === "answered" && delta.findingsAdded >= SUCCESS_PATTERN_THRESHOLD) {
+    await recordSuccessPattern(selection, expertConfig, handoff, delta, cIter);
   }
 
   // Auto-graduate provisional findings
@@ -264,11 +364,7 @@ async function integrateHandoff(
   projectDir: string,
   handoff: ExpertHandoff,
   conductorIteration: number
-): Promise<{ findingsAdded: number; questionsAdded: number }> {
-  // Snapshot knowledge store counts before integration
-  const findingsBefore = await readFindings(projectDir);
-  const questionsBefore = await readQuestions(projectDir);
-
+): Promise<void> {
   const prompt = await assembleHandoffIntegrationPrompt(projectDir, handoff);
   const iterStr = String(conductorIteration).padStart(3, "0");
 
@@ -281,24 +377,9 @@ async function integrateHandoff(
 
   if (result.exitCode !== 0) {
     console.log(`   ⚠ Integration exited with code ${result.exitCode}`);
-  }
-
-  // Post-integration validation: verify knowledge store was actually updated
-  const findingsAfter = await readFindings(projectDir);
-  const questionsAfter = await readQuestions(projectDir);
-  const newFindings = findingsAfter.length - findingsBefore.length;
-  const newQuestions = questionsAfter.length - questionsBefore.length;
-
-  if (newFindings > 0 || newQuestions > 0) {
-    console.log(`   ✓ Knowledge store updated (+${newFindings} findings, +${newQuestions} questions)`);
-  } else if (handoff.findings.length > 0) {
-    console.log(`   ⚠ Integration ran but knowledge store unchanged (expected +${handoff.findings.length} findings)`);
-    console.log(`     Handoff contained findings but none persisted — check integration trace`);
   } else {
-    console.log(`   ✓ Integration complete (no new findings in handoff)`);
+    console.log(`   ✓ Integration complete`);
   }
-
-  return { findingsAdded: newFindings, questionsAdded: newQuestions };
 }
 
 // ── State Management ──
@@ -473,6 +554,47 @@ async function safeReadFile(filePath: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+// ── Success Patterns ──
+
+async function recordSuccessPattern(
+  selection: QuestionSelection,
+  expertConfig: ExpertConfig,
+  handoff: ExpertHandoff,
+  delta: { findingsAdded: number; questionsAdded: number },
+  conductorIteration: number
+): Promise<void> {
+  const patternDir = path.join(SEA_ROOT, "success-patterns");
+  await mkdir(patternDir, { recursive: true });
+
+  const slug = selection.suggestedExpertType.replace(/\s+/g, "-").toLowerCase();
+  const fileName = `${selection.questionType}-${slug}-d${String(conductorIteration).padStart(2, "0")}.md`;
+
+  const content = [
+    `# Success Pattern: ${selection.questionType} — ${selection.suggestedExpertType}`,
+    ``,
+    `## Strategy`,
+    `Expert type "${selection.suggestedExpertType}" for ${selection.questionType} question.`,
+    `Question: ${selection.question}`,
+    ``,
+    `## When It Works`,
+    `- Question type: ${selection.questionType}`,
+    `- Converged in ${handoff.iterationsRun}/${expertConfig.maxIterations} iterations`,
+    ``,
+    `## Evidence`,
+    `- Dispatch: D${conductorIteration}`,
+    `- Question: ${selection.questionId}`,
+    `- Findings produced: ${delta.findingsAdded}`,
+    `- Iterations: ${handoff.iterationsRun}/${expertConfig.maxIterations}`,
+    `- Status: ${handoff.status}`,
+    ``,
+    `## Key Decisions`,
+    handoff.summary || "(no summary)",
+  ].join("\n");
+
+  await writeFile(path.join(patternDir, fileName), content, "utf-8");
+  console.log(`   ✓ Success pattern recorded: ${fileName}`);
 }
 
 // ── Helpers ──
