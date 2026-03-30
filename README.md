@@ -2,50 +2,94 @@
 
 A self-improving research & synthesis agent that evolves its own playbook, expert personas, and tools through execution feedback. No human labels needed — the system learns from its own traces.
 
-SEA synthesizes five frontier approaches into one architecture:
+SEA synthesizes ideas from frontier research into one architecture:
 
-| Paper | What SEA takes from it |
-|-------|----------------------|
+| Source | What SEA takes from it |
+|--------|----------------------|
 | **ACE** (Stanford/SambaNova) | Evolving playbook via Generator + Reflector + Curator |
 | **HyperAgents** (Meta AI) | Self-referential meta-agent that modifies its own improvement logic |
 | **Bilevel Autoresearch** | Outer meta-loop that injects new code mechanisms at runtime |
 | **Pattern Language** | Reusable skills repository extracted from successful runs |
 | **TurboQuant** (Google) | Context efficiency for long-running meta-reasoning |
+| **ARIS** (Auto-claude-code-research) | Cross-model adversarial review for evaluation integrity |
+| **Agent Lightning** (Microsoft) | Structured spans and credit assignment across multi-turn trajectories |
+| **AgentEvolver / GEA / Memento-Skills** | Novelty pressure in evolution, skill libraries with utility scores |
 
 ## How it works
 
+SEA has two operating modes:
+
+### Conductor mode (recommended)
+
+The **two-loop architecture** selects questions, creates bespoke expert personas, and dispatches research autonomously.
+
 ```
 Terminal
-  sea loop <project>              thin CLI, no LLM, runs forever
+  sea conduct <project>             thin CLI, runs until goal met
         |
-        |-- claude -p "EXECUTE..."     fresh 200k context
-        |   reads persona.md            researches, fetches sources
-        |   writes trace + experiment    saves all references
+        |  OUTER LOOP (Conductor)
         |
-        |-- claude -p "REFLECT..."     fresh 200k context
-        |   scores output               extracts patterns
-        |   writes reflection            identifies what worked and WHY
+        |-- claude -p "SELECT..."       reads knowledge frontier
+        |   picks highest-value          ranks by info gain, feasibility,
+        |   open question                domain data density
         |
-        |-- claude -p "EVOLVE..."      fresh 200k context
-        |   reads reflections            proposes persona improvement
-        |   snapshots old version        applies surgical change
+        |-- claude -p "CREATE..."       fresh 200k context
+        |   crafts expert persona        200-300 lines, 6-section anatomy
+        |   from creation framework      the "80% investment"
         |
-        |-- (every ~5 iters) META      fresh 200k context
-        |   reads cross-project data     updates the conductor itself
+        |   INNER LOOP (Expert)
+        |   |-- claude -p "RESEARCH..."  1-5 iterations
+        |   |   plan → search → synth    until convergence or exhaustion
+        |   |   writes findings           epistemic tags on every claim
+        |   '-- converge? loop or exit
+        |
+        |-- claude -p "INTEGRATE..."    validates + persists
+        |   merges into knowledge store  deduplicates, checks contradictions
+        |   updates summary              tracks goal progress
+        |
+        |-- (every ~3 iters) META       evolves the conductor itself
         |
         '-- repeat until goal met
 ```
 
-Each step spawns a **fresh Claude Code session** via `claude -p`, so the loop runs indefinitely without context pressure. The TypeScript CLI just manages files and the loop — all intelligence lives in the Claude sessions.
+### Pipeline mode
+
+The original **6-step pipeline** for single-project deep-dive iterations with self-evaluation and persona evolution.
+
+```
+Terminal
+  sea loop <project>                thin CLI, runs forever
+        |
+        |-- PLAN      → research plan from goal + knowledge
+        |-- RESEARCH   → web search, source gathering
+        |-- SUMMARIZE  → persist findings to knowledge store
+        |-- SYNTHESIZE → write report from knowledge
+        |-- EVALUATE   → score output (uses Sonnet for Axiom 1 separation)
+        |-- EVOLVE     → improve persona (3 candidates, novelty-scored)
+        |
+        '-- repeat, auto-rollback on regression
+```
 
 ### Two-speed evolution
 
 | Layer | File | Evolves | Purpose |
 |-------|------|---------|---------|
-| **Conductor** | `CLAUDE.md` | Every ~5 iterations | Orchestration protocols, meta-strategies |
+| **Conductor** | `CLAUDE.md` | Every ~3-5 iterations | Orchestration protocols, meta-strategies |
 | **Expert Persona** | `projects/{name}/persona.md` | Every iteration | Domain expertise, heuristics, strategies |
 
-The conductor learns meta-lessons slowly across projects. The expert persona adapts rapidly to each project's domain.
+The conductor learns meta-lessons slowly across projects. Expert personas adapt rapidly to each project's domain.
+
+## Recent improvements (v0.2)
+
+Five improvements validated on sewage-gold research project (5 conductor dispatches + 2 pipeline iterations, score 4.4 → 6.7):
+
+| # | Feature | What it does |
+|---|---------|-------------|
+| 1 | **Cross-model evaluate** | Evaluate step uses Sonnet (different weights) while all other steps use Opus. Axiom 1: separate producer from evaluator. |
+| 2 | **Structured spans** | Every step records timing, token counts, and findings to `metrics/spans.jsonl`. Enables credit assignment analysis. |
+| 3 | **Success patterns** | High-IG dispatches auto-record strategy to `success-patterns/`. Loaded into expert creation alongside failure patterns. |
+| 4 | **Novelty pressure** | Evolution generates 3 candidates scored on `performance×0.7 + novelty×0.3`. Diversity budget every 5th iteration forces exploration. |
+| 5 | **Expert library** | Scores and reuses high-performing personas. Adapts existing persona instead of creating from scratch when a match exists. |
 
 ## Quick start
 
@@ -75,185 +119,187 @@ projects/my-research/
   goal.md              problem statement + acceptance criteria
   persona.md           expert persona tailored to your domain
   state.json           iteration tracker
+  knowledge/           structured findings store (JSONL)
+  experts/             per-dispatch expert personas
+  expert-library/      persona reuse with utility scores
   references/          all sources (links, PDFs, notes)
   experiments/         what was tried + results + WHY analysis
-  traces/              raw execution logs
+  traces/              raw execution logs with timing
   reflections/         scored evaluations per iteration
-  metrics/             score history (JSONL)
+  metrics/             scores + spans + conductor metrics (JSONL)
   lineage/             what changed, why, before/after scores
   output/              final deliverables
 ```
 
-### Run the loop
+### Run with conductor (recommended)
+
+```bash
+npx tsx src/cli.ts conduct my-research
+```
+
+The conductor selects questions, creates expert personas, dispatches research, and integrates results. Walk away — it runs until your goal criteria are met.
+
+### Run with pipeline
 
 ```bash
 npx tsx src/cli.ts loop my-research
 ```
 
-Walk away. SEA will:
+The pipeline runs plan → research → summarize → synthesize → evaluate → evolve in a loop. The evaluate step uses Sonnet by default (Axiom 1 separation).
 
-1. Research your goal using web search, web fetch, and file tools
-2. Score its own output on accuracy, coverage, coherence, and insight quality
-3. Evolve the expert persona based on what worked and what didn't
-4. Every ~5 iterations, update the conductor itself
-5. Auto-rollback if performance regresses
-
-### Other commands
+### Commands
 
 ```bash
-sea status [project]              # show current state and scores
-sea history <project>             # evolution timeline with scores
-sea run <project>                 # single iteration (execute + reflect + evolve)
-sea rollback <project> [version]  # restore persona to earlier version
-sea rollback conductor [version]  # restore conductor to earlier version
+sea new <project>                    # interactive project creation
+sea conduct <project>                # two-loop conductor (recommended)
+sea dispatch <project>               # single conductor iteration
+sea loop <project>                   # continuous pipeline loop
+sea run <project>                    # single pipeline iteration
+sea status [project]                 # show current state and scores
+sea history <project>                # evolution timeline with scores
+sea rollback <project> [version]     # restore persona to earlier version
+sea rollback conductor [version]     # restore conductor to earlier version
 ```
 
 Replace `sea` with `npx tsx src/cli.ts` until you build and link globally.
+
+### Key options
+
+| Flag | Commands | Default | Purpose |
+|------|----------|---------|---------|
+| `-c, --cooldown <seconds>` | conduct, loop | 30 | Pause between iterations |
+| `-m, --max <n>` | conduct, loop | unlimited | Stop after N iterations |
+| `-e, --expert-max <n>` | conduct, dispatch | 5 | Max expert inner iterations |
+| `--meta-every <n>` | conduct, loop | 3 / 5 | Conductor/meta evolution frequency |
+| `--evaluate-model <model>` | run, loop, conduct, dispatch | sonnet | Model for evaluate step (Axiom 1) |
 
 ## Architecture
 
 ```
 sea/
   CLAUDE.md                    THE CONDUCTOR - evolving playbook
-  conductor-history/           every version of CLAUDE.md ever
+  conductor-history/           every version of CLAUDE.md
+  failure-patterns/            cross-project failure library
+  success-patterns/            cross-project success library
+  eval/
+    rubrics.md                 5-dimension scoring rubrics
+    integrity.md               10 truthfulness axioms (evolvable)
+  templates/
+    expert-creation-framework.md   6-section persona anatomy
+  src/                         TypeScript CLI (~4,750 LOC)
+    cli.ts                     command dispatcher
+    conductor.ts               outer loop orchestration
+    expert-loop.ts             inner loop iteration
+    expert-factory.ts          persona creation + library lookup
+    expert-library.ts          persona scoring and reuse
+    knowledge.ts               findings + questions JSONL store
+    context.ts                 prompt assembly for pipeline steps
+    conductor-context.ts       prompt assembly for conductor steps
+    metrics.ts                 scores + spans
+    runner.ts                  spawn claude -p sessions
+    loop.ts                    pipeline iteration flow
+    safety.ts                  regression detection + rollback
+    versioner.ts               snapshot/restore
+    discovery.ts               interactive project setup
+    integrity.ts               knowledge store validation
+    types.ts                   all interfaces + defaults
   projects/
     {name}/
       goal.md                  problem statement
       persona.md               expert persona (evolves every iteration)
       persona-history/         every version of persona.md
-      references/              links, PDFs, notes
-      experiments/             hypothesis + method + result + WHY
+      knowledge/
+        findings.jsonl         structured fact store with lifecycle
+        questions.jsonl         open research frontier
+        summary.md             compressed state (max 2KB)
+      experts/                 per-dispatch expert personas
+      expert-library/          persona reuse library (JSONL)
+      metrics/
+        scores.jsonl           pipeline score trajectory
+        spans.jsonl            structured timing per step
+        conductor-metrics.jsonl dispatch outcomes
+      lineage/changes.jsonl    evolution decisions
       traces/                  raw session output
-      reflections/             scored analysis
-      metrics/scores.jsonl     score trajectory
-      lineage/changes.jsonl    what changed and why
+      reflections/             scored evaluations
       output/                  deliverables
-  skills/                      cross-project reusable patterns
-  tools/                       bilevel-injected TypeScript tools
-  eval/rubrics.md              scoring rubrics
-  eval/integrity.md            truthfulness principles (evolvable)
-  src/                         TypeScript CLI (thin orchestrator)
 ```
 
-### Design principles
+### Knowledge layer
 
-- **Never delete anything.** Every mutation snapshots the old file to `*-history/`. Full audit trail for post-op analysis.
-- **Explainability is mandatory.** If you can't explain HOW you found an answer, the answer means nothing. Experiment logs require WHY analysis. Lineage records require reasoning.
-- **Safety through structure.** Versioning, snapshots, A/B gates, regression checks — not human confirmation prompts.
-- **Projects are self-contained.** Everything needed to audit a project lives in one folder.
-- **.md files for everything.** Human-readable, git-diffable, Claude-native.
+Every finding carries a lifecycle and epistemic tag:
+
+- **Tags:** `[SOURCE]` (URL-backed), `[DERIVED]` (computed), `[ESTIMATED]` (judgment), `[ASSUMED]` (untrusted), `[UNKNOWN]` (honest gap)
+- **Lifecycle:** provisional → verified (auto after 3 iters if confidence ≥ 0.85 + SOURCE with URL) or refuted/superseded
+- **Questions:** open → resolved (by finding ID) or deferred
 
 ### Scoring rubrics
 
-Each iteration is scored on four dimensions (1-10):
+Pipeline iterations are scored on five dimensions (1-10):
 
 | Dimension | Weight | What it measures |
 |-----------|--------|-----------------|
-| Accuracy | 0.30 | Factual correctness, proper sourcing |
-| Coverage | 0.25 | Breadth of relevant topics addressed |
-| Coherence | 0.20 | Logical flow, structure, readability |
-| Insight Quality | 0.25 | Novel connections, depth, actionability |
+| Accuracy | 0.25 | Factual correctness, proper sourcing |
+| Coverage | 0.20 | Breadth of relevant topics addressed |
+| Coherence | 0.15 | Logical flow, structure, readability |
+| Insight Quality | 0.20 | Novel connections, depth, actionability |
+| Process Compliance | 0.20 | Artifacts, epistemic tags, references |
 
-Scores are tracked in `metrics/scores.jsonl`. If the rolling average drops >15%, the persona auto-rollbacks to the previous version.
+If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the previous version.
+
+### Design principles
+
+- **Never delete anything.** Every mutation snapshots the old file. Full audit trail.
+- **Persona is strategy.** 80% of research quality comes from expert persona fit. The creation framework is the core investment.
+- **Exhaustion is knowledge.** When a question exhausts, the negative result becomes a structured finding documenting what was searched.
+- **Structure over rules.** Constraints are architectural (iteration caps, separate scoring model, staged workflow) not instructional.
+- **Kill fast, invest slow.** Question types have iteration caps (data-hunt: 3, synthesis: 2) to prevent wasted iterations.
+- **Learn bidirectionally.** Both failure patterns AND success patterns feed into expert creation.
 
 ## Running with Claude Code
 
-SEA is built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every step in the loop (EXECUTE, REFLECT, EVOLVE, META) spawns a fresh `claude -p` session with its own 200k context window. The TypeScript CLI orchestrates files and the loop — all research, scoring, and evolution happens inside Claude sessions.
-
-### Prerequisites
-
-- Claude Code CLI installed and authenticated — `claude --version` should work in your terminal
-- The repo includes `.claude/settings.local.json` with `bypassPermissions` enabled, so spawned sessions run in full-auto mode (web search, file writes, etc. without prompts)
+SEA is built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every step spawns a fresh `claude -p` session with its own context window. The TypeScript CLI orchestrates files and the loop — all intelligence lives in the Claude sessions.
 
 ### The simplest way to start
 
-Open Claude Code in the `sea/` directory and tell it what you want to research:
+Open Claude Code in the `sea/` directory:
 
 ```
 cd sea
 claude
 ```
 
-Then describe your project and tell Claude to create and run it:
+Then:
 
 ```
 Create a project called "lithium-recycling" with the goal below, then run
-sea loop for as many iterations as it takes. Use npx tsx src/cli.ts to run
-commands.
+sea conduct for 5 iterations. Use npx tsx src/cli.ts to run commands.
 
 Goal:
 Find technically viable methods for recovering lithium from spent EV
 batteries at >90% recovery rate. Compare hydrometallurgical vs
-pyrometallurgical vs direct recycling routes. Produce a comparison
-matrix with recovery efficiency, cost per kg Li recovered, environmental
-impact, and technology readiness level for each method.
+pyrometallurgical vs direct recycling routes.
 ```
 
-Claude Code will run `sea new` interactively, then start the loop. You can walk away — each iteration runs autonomously, evolves the persona, and writes everything to files.
+Claude Code will run `sea new` interactively, then start the conductor loop.
 
-### Running manually
-
-If you prefer to drive each step yourself:
+### Monitoring
 
 ```bash
-# Create the project (interactive discovery questions)
-npx tsx src/cli.ts new lithium-recycling
-
-# Run a single iteration to test
-npx tsx src/cli.ts run lithium-recycling
-
-# Run the continuous loop
-npx tsx src/cli.ts loop lithium-recycling
+npx tsx src/cli.ts status my-research    # state + scores
+npx tsx src/cli.ts history my-research   # evolution timeline
 ```
 
-Loop options:
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--cooldown <seconds>` | 30 | Pause between iterations |
-| `--max <n>` | unlimited | Stop after N iterations |
-| `--meta-every <n>` | 5 | Conductor evolution frequency |
-
-### What happens during the loop
-
-Each iteration spawns 3 fresh Claude sessions in sequence:
-
-1. **EXECUTE** — reads persona + goal, researches via web search/fetch, writes output + experiment log + trace
-2. **REFLECT** — reads the execution trace, scores it on 4 dimensions (accuracy, coverage, coherence, insight), writes reflection
-3. **EVOLVE** — reads last 3 reflections, identifies highest-leverage improvement, snapshots old persona, writes updated persona
-
-Every ~5 iterations, a **META** step reads lineage across all projects and updates the conductor (`CLAUDE.md`) itself.
-
-If scores regress >15% from the rolling average, the persona auto-rollbacks to the previous version.
-
-### Monitoring a running project
-
-```bash
-# Current state, scores, and trend
-npx tsx src/cli.ts status lithium-recycling
-
-# Full evolution timeline with score matrix
-npx tsx src/cli.ts history lithium-recycling
-```
-
-Or read the files directly:
+Or read files directly:
 
 | What you want to know | Where to look |
 |----------------------|---------------|
-| What did the last iteration produce? | `output/` |
-| What worked and what didn't? | `experiments/exp-NNN.md` |
-| How was it scored and why? | `reflections/iter-NNN.md` |
-| How is the persona evolving? | `persona.md` (current) or `persona-history/` (all versions) |
-| What changed and why? | `lineage/changes.jsonl` |
-| Score trajectory | `metrics/scores.jsonl` |
-
-### Stopping, resuming, and rolling back
-
-- **Stop:** `Ctrl+C` — finishes the current iteration gracefully, then exits
-- **Resume:** Run `sea loop` again — all state is in files, it picks up where it left off
-- **Single step:** `sea run <project>` — one iteration at a time for closer observation
-- **Rollback persona:** `sea rollback <project> [version]` — restore an earlier persona version
-- **Rollback conductor:** `sea rollback conductor [version]` — restore an earlier conductor version
+| Current knowledge | `knowledge/summary.md` |
+| All findings | `knowledge/findings.jsonl` |
+| Open questions | `knowledge/questions.jsonl` |
+| Last iteration output | `output/` |
+| How it was scored | `reflections/iter-NNN.md` |
+| Persona evolution | `lineage/changes.jsonl` |
+| Step timing | `metrics/spans.jsonl` |
 
 ## Roadmap
 
@@ -262,19 +308,27 @@ Or read the files directly:
 - [x] **Wave 3**: Evolution + never-delete versioning
 - [x] **Wave 4**: Continuous loop + regression rollback
 - [x] **Wave 5**: Meta-evolution (conductor self-improvement)
-- [ ] **Wave 6**: Skills repository (cross-project patterns)
-- [ ] **Wave 7**: Bilevel code injection (runtime tool generation)
-- [ ] **Wave 8**: Context efficiency (trace summarization, skill filtering)
+- [x] **Wave 6**: Two-loop conductor/expert architecture
+- [x] **Wave 7**: Cross-model evaluate, structured spans, success patterns, novelty pressure, expert library
+- [ ] **Wave 8**: Skills repository (cross-project reusable patterns)
+- [ ] **Wave 9**: Bilevel code injection (runtime tool generation)
+- [ ] **Wave 10**: Context efficiency (trace summarization, skill filtering)
 
 ## Research foundation
 
 This project synthesizes ideas from:
 
-- **ACE: Agentic Context Engineering** — Turn static prompts into a living playbook updated via execution feedback. Small models beat expensive agents on benchmarks.
-- **HyperAgents** (Meta AI) — Self-referential multi-agent system where the Meta Agent edits code, prompts, tools, and its own improvement logic.
-- **Bilevel Autoresearch** (arXiv 2603.23420) — Inner research loop + outer meta-loop that reads inner code, spots bottlenecks, and injects new Python mechanisms at runtime. 5x performance jump on pretraining benchmarks.
-- **Pattern Language for Skills-Based Agentic AI** — Extract reusable, observable patterns from real runs into a skills repository.
-- **TurboQuant** (Google) — KV-cache compression delivering 6-8x memory/speed gains for long-context meta-reasoning.
+- **ACE: Agentic Context Engineering** — Turn static prompts into a living playbook updated via execution feedback
+- **HyperAgents** (Meta AI) — Self-referential multi-agent system where the Meta Agent edits its own improvement logic
+- **Bilevel Autoresearch** — Inner research loop + outer meta-loop that injects new mechanisms at runtime
+- **Pattern Language for Skills-Based Agentic AI** — Extract reusable patterns from real runs into a skills repository
+- **TurboQuant** (Google) — KV-cache compression for long-context meta-reasoning
+- **ARIS** (Auto-claude-code-research-in-sleep) — Cross-model adversarial review, markdown-native state machines
+- **Agent Lightning** (Microsoft) — Structured observability spans, RL credit assignment across trajectories
+- **AgentEvolver** — Self-questioning + self-attributing for autonomous improvement
+- **GEA** (Group-Evolving Agents) — Performance-Novelty scoring to escape local optima
+- **Memento-Skills** — Skill libraries with utility scores, Read-Execute-Reflect-Write loops
+- **OpenSpace** — Auto-fix, auto-improve, and cross-agent learning
 
 ## License
 
