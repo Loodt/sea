@@ -36,10 +36,48 @@ Observations from conductor dispatches, preserved for reference. Key behavioral 
 | Questions resolved | 4 | 3 | 2 | 2 | 2 | 2 | 15 |
 | New questions generated | 9 | 9 | 5 | 5 | 4 | 5 | 37 |
 
+## Second Run Metrics (sewage-gold D21-D28, conductor session 2)
+
+| Dispatch | Question | Type | Status | Findings | Inner Iters | F/Iter |
+|----------|----------|------|--------|----------|-------------|--------|
+| D21 | Q001 | landscape | answered | 0 | 5 | 0.0 |
+| D22 | Q003 | — | answered | 11 | 2 | 5.5 |
+| D23 | Q010 | — | crashed | 0 | 2 | — |
+| D24 | Q010 | — | answered | 6 | 2 | 3.0 |
+| D25 | Q012 | — | answered | 7 | 1 | 7.0 |
+| D26 | Q002 | — | crashed | 0 | 2 | — |
+| D27 | Q002 | mechanism | answered | 28 | 4 | 7.0 |
+| D28 | Q005 | — | answered | 7 | 2 | 3.5 |
+
+**Summary:** 59 findings in 20 inner iterations. Productive: 3.7 F/iter (up from 2.6 in first run). Zero exhausted dispatches — type caps + improved question selection eliminated wasted iterations. Crash recovery 2/2 successful. Knowledge compounding confirmed: D27 hit 7 F/iter with 100+ findings in store.
+
+**New pattern: Question frontier control.** Net +2 questions (vs +22 in first run). Pruning mode and tighter selection contain frontier growth effectively.
+
+**New pattern: Crash-then-succeed is the normal infrastructure recovery path.** Both crashes recovered on re-dispatch with substantial output (6 and 28 findings). Re-dispatch should be immediate, not delayed.
+
+## Third Run Metrics (total-value-recovery D1-D5, conductor session 1)
+
+| Dispatch | Question | Type | Status | Findings | Inner Iters | F/Iter |
+|----------|----------|------|--------|----------|-------------|--------|
+| D1 | Q001 | landscape | answered | 6 | 2 | 3.0 |
+| D2 | Q003 | kill-check | answered | 12 | 2 | 6.0 |
+| D3 | Q002 | landscape | answered | 33 | 3 | 11.0 |
+| D4 | Q005 | landscape | crashed | 0 | 2 | — |
+| D5 | Q004 | kill-check | answered | 17 | 2 | 8.5 |
+
+**Summary:** 68 findings in 11 inner iterations. Productive: 7.6 F/iter (highest of any run). Zero exhausted dispatches. Kill-checks (Q003, Q004) both converged in 2 iterations with high finding density. D3 (landscape) hit 11 F/iter — knowledge compounding starting even with only 18 findings in store, suggesting domain data density matters more than store size for early dispatches.
+
+**New pattern: Kill-check questions are viable as early dispatches.** Q003 (cyanide integration viability) and Q004 (SiO₂/Al₂O₃ separation) both dispatched in the first 5 and both converged productively. Kill-checks don't require a mature store — they need a clear hypothesis to test.
+
+**New pattern: Hollow answers are real.** D21 (sewage-gold second run) showed answered + 0 findings. This is a protocol gap: the conductor treated it as productive convergence. Addressed in v017 with strengthened hollow answer gate.
+
+**New pattern: Near-duplicate questions waste dispatches.** Sewage-gold Q007 and Q011 both ask about gold speciation in sewage with slightly different framing. Selection should check for semantic overlap before creating new questions.
+
 ## Resolved Infrastructure Debt (archived from CLAUDE.md)
 
 Items 5-8, 12-15, 17-22 from the original debt list were resolved across v006-v013. Full descriptions preserved here for historical context.
 
+- **#1 (v015):** Crash gate in loop.ts — Circuit breaker implemented in expert-loop.ts. 2 consecutive crashes → forced handoff from best successful output. Validated in D23-D24, D26-D27.
 - **#5 (v006):** Evolution Protocol extraction — `extractSection()` now matches heading.
 - **#6 (v008):** Expert factory failure pattern truncation — `.slice(0,5)` removed.
 - **#8 (v012):** Conductor crash gate — expert-loop.ts tracks exit codes, "crashed" status distinct from "exhausted".

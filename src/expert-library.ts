@@ -1,7 +1,8 @@
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, mkdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { LibraryEntry, QuestionType } from "./types.js";
+import { atomicAppendJsonl, atomicUpdateJsonl } from "./file-lock.js";
 
 /**
  * Expert Library — scores and reuses high-performing expert personas.
@@ -33,7 +34,7 @@ export async function readLibrary(projectDir: string): Promise<LibraryEntry[]> {
 export async function appendLibraryEntry(projectDir: string, entry: LibraryEntry): Promise<void> {
   const dir = path.join(projectDir, "expert-library");
   await mkdir(dir, { recursive: true });
-  await appendFile(path.join(projectDir, LIBRARY_FILE), JSON.stringify(entry) + "\n", "utf-8");
+  await atomicAppendJsonl(path.join(projectDir, LIBRARY_FILE), entry);
 }
 
 export async function updateLibraryEntry(
@@ -41,18 +42,14 @@ export async function updateLibraryEntry(
   personaHash: string,
   update: Partial<LibraryEntry>
 ): Promise<void> {
-  const entries = await readLibrary(projectDir);
-  const idx = entries.findIndex((e) => e.personaHash === personaHash);
-  if (idx === -1) return;
-
-  entries[idx] = { ...entries[idx], ...update };
-
-  const dir = path.join(projectDir, "expert-library");
-  await mkdir(dir, { recursive: true });
-  await writeFile(
+  await atomicUpdateJsonl<LibraryEntry>(
     path.join(projectDir, LIBRARY_FILE),
-    entries.map((e) => JSON.stringify(e)).join("\n") + "\n",
-    "utf-8"
+    (entries) => {
+      const idx = entries.findIndex((e) => e.personaHash === personaHash);
+      if (idx === -1) return entries;
+      entries[idx] = { ...entries[idx], ...update };
+      return entries;
+    }
   );
 }
 
@@ -78,9 +75,10 @@ export function findMatchingExperts(
   const scored = active.map((entry) => {
     const entryWords = extractKeywords(entry.domain + " " + entry.expertType);
     const overlap = keywords.filter((kw) => entryWords.includes(kw)).length;
+    const normalizedOverlap = keywords.length > 0 ? overlap / keywords.length : 0;
     const maxScore = Math.max(...active.map((e) => e.score), 1);
     const normalizedScore = entry.score / maxScore;
-    const composite = overlap * 0.4 + normalizedScore * 0.6;
+    const composite = normalizedOverlap * 0.4 + normalizedScore * 0.6;
     return { entry, composite };
   });
 
@@ -108,7 +106,8 @@ export async function upsertLibraryEntry(
   domain: string,
   expertType: string,
   findingsAdded: number,
-  personaPath: string
+  personaPath: string,
+  adaptedFrom?: string
 ): Promise<void> {
   const library = await readLibrary(projectDir);
   const existing = library.find((e) => e.personaHash === personaHash);
@@ -134,6 +133,7 @@ export async function upsertLibraryEntry(
       personaPath,
       score: computeUtilityScore(findingsAdded, 1),
       status: "active",
+      ...(adaptedFrom ? { adaptedFrom } : {}),
     });
   }
 }

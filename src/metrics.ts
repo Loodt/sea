@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir, appendFile } from "node:fs/promises";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Score, Span } from "./types.js";
+import { atomicAppendJsonl } from "./file-lock.js";
 
 /**
  * Updated overall score weights (v002 conductor added processCompliance).
@@ -138,23 +139,17 @@ export async function appendScore(
   await mkdir(metricsDir, { recursive: true });
   const filePath = path.join(metricsDir, "scores.jsonl");
 
+  // Deduplication: read existing scores, skip if iteration already logged
   try {
     const existing = await readFile(filePath, "utf-8");
-    // Deduplication: skip if this iteration already has a score
-    const lines = existing.trim().split("\n").filter(Boolean);
-    const alreadyLogged = lines.some((line) => {
-      try {
-        const entry = JSON.parse(line);
-        return entry.iteration === score.iteration;
-      } catch {
-        return false;
-      }
+    const alreadyLogged = existing.trim().split("\n").filter(Boolean).some((line) => {
+      try { return JSON.parse(line).iteration === score.iteration; } catch { return false; }
     });
     if (alreadyLogged) return;
-    await writeFile(filePath, existing + JSON.stringify(score) + "\n", "utf-8");
   } catch {
-    await writeFile(filePath, JSON.stringify(score) + "\n", "utf-8");
+    // File doesn't exist yet — proceed to append
   }
+  await atomicAppendJsonl(filePath, score);
 }
 
 /**
@@ -203,7 +198,7 @@ export function isRegressing(
 export async function appendSpan(projectDir: string, span: Span): Promise<void> {
   const metricsDir = path.join(projectDir, "metrics");
   await mkdir(metricsDir, { recursive: true });
-  await appendFile(path.join(metricsDir, "spans.jsonl"), JSON.stringify(span) + "\n", "utf-8");
+  await atomicAppendJsonl(path.join(metricsDir, "spans.jsonl"), span);
 }
 
 /**

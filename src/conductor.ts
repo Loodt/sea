@@ -1,10 +1,11 @@
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
+import { atomicAppendJsonl } from "./file-lock.js";
 import path from "node:path";
 import { createExpert } from "./expert-factory.js";
 import { runExpertLoop } from "./expert-loop.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
-import { readFindings, readQuestions, graduateFindings } from "./knowledge.js";
+import { readFindings, readQuestions, graduateFindings, enforceSummarySize } from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
   assembleHandoffIntegrationPrompt,
@@ -111,10 +112,27 @@ export async function runConductorIteration(
   const findingsBeforeDispatch = (await readFindings(projectDir)).length;
   const questionsBeforeDispatch = (await readQuestions(projectDir)).length;
 
-  // Step 3: Run expert loop
+  // Step 3: Run expert loop (with one retry on zero-finding crash)
   console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
   const expertStart = Date.now();
-  const handoff = await runExpertLoop(expertConfig);
+  let handoff = await runExpertLoop(expertConfig);
+
+  if (handoff.status === "crashed" && handoff.findings.length === 0) {
+    console.log(`\n🔄 RETRY — expert crashed with no findings, retrying with fresh persona...`);
+    const retryConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter);
+    await writeFile(
+      path.join(retryConfig.expertDir, "persona.md"),
+      retryConfig.persona,
+      "utf-8"
+    );
+    handoff = await runExpertLoop(retryConfig);
+    if (handoff.status === "crashed") {
+      console.log(`   ⚠ Retry also crashed — accepting crash result`);
+    } else {
+      console.log(`   ✓ Retry succeeded: ${handoff.status}`);
+    }
+  }
+
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}-dispatch`,
     step: "dispatch-expert",
@@ -135,15 +153,21 @@ export async function runConductorIteration(
   } else {
     console.log("\n📥 INTEGRATE — merging results into knowledge store...");
     await integrateHandoff(projectDir, handoff, cIter);
+    await enforceSummarySize(projectDir);
   }
 
   // Compute dispatch-level delta (captures findings written by expert + integration)
   const findingsAfterDispatch = (await readFindings(projectDir)).length;
   const questionsAfterDispatch = (await readQuestions(projectDir)).length;
+  const fileDelta = findingsAfterDispatch - findingsBeforeDispatch;
+  const handoffDelta = handoff.findings?.length || 0;
   const delta = {
-    findingsAdded: findingsAfterDispatch - findingsBeforeDispatch,
+    findingsAdded: Math.max(fileDelta, handoffDelta),
     questionsAdded: questionsAfterDispatch - questionsBeforeDispatch,
   };
+  if (fileDelta === 0 && handoffDelta > 0) {
+    console.log(`   ℹ File delta was 0 but handoff reports ${handoffDelta} findings (expert wrote directly)`);
+  }
   if (delta.findingsAdded > 0 || delta.questionsAdded > 0) {
     console.log(`   ✓ Dispatch delta: +${delta.findingsAdded} findings, +${delta.questionsAdded} questions`);
   }
@@ -172,6 +196,10 @@ export async function runConductorIteration(
   });
 
   // Update expert library with dispatch results
+  // Landscape dispatches produce questions, not findings — count both as IG
+  const effectiveIG = selection.questionType === "landscape"
+    ? delta.findingsAdded + delta.questionsAdded
+    : delta.findingsAdded;
   const pHash = hashPersona(expertConfig.persona);
   const personaRelPath = path.relative(projectDir, path.join(expertConfig.expertDir, "persona.md"));
   await upsertLibraryEntry(
@@ -180,13 +208,21 @@ export async function runConductorIteration(
     selection.questionType,
     selection.question.slice(0, 100),
     selection.suggestedExpertType,
-    delta.findingsAdded,
-    personaRelPath
+    effectiveIG,
+    personaRelPath,
+    expertConfig.adaptedFromHash
   );
 
-  // Record success pattern for high-IG answered dispatches
+  // Record success pattern for high-IG dispatches (type-aware thresholds)
   const SUCCESS_PATTERN_THRESHOLD = 5;
-  if (handoff.status === "answered" && delta.findingsAdded >= SUCCESS_PATTERN_THRESHOLD) {
+  const LANDSCAPE_QUESTION_THRESHOLD = 3;
+  const isSuccessfulDispatch =
+    handoff.status === "answered" && delta.findingsAdded >= SUCCESS_PATTERN_THRESHOLD;
+  const isSuccessfulLandscape =
+    selection.questionType === "landscape" &&
+    (handoff.status === "answered" || handoff.status === "narrowed") &&
+    delta.questionsAdded >= LANDSCAPE_QUESTION_THRESHOLD;
+  if (isSuccessfulDispatch || isSuccessfulLandscape) {
     await recordSuccessPattern(selection, expertConfig, handoff, delta, cIter);
   }
 
@@ -213,6 +249,7 @@ export async function runConductorIteration(
     innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
     ...(handoff.exhaustionReason ? { exhaustionReason: handoff.exhaustionReason } : {}),
+    questionType: selection.questionType,
   });
 
   return { conductorIteration: cIter, handoff };
@@ -436,26 +473,20 @@ async function appendConductorMetric(
   await mkdir(metricsDir, { recursive: true });
   const filePath = path.join(metricsDir, "conductor-metrics.jsonl");
 
+  // Deduplication: skip if this conductorIteration already logged
   try {
     const existing = await readFile(filePath, "utf-8");
-    // Deduplication: skip if this conductorIteration already logged
-    const lines = existing.trim().split("\n").filter((l) => l.trim());
-    const alreadyLogged = lines.some((line) => {
-      try {
-        const entry = JSON.parse(line);
-        return entry.conductorIteration === metric.conductorIteration;
-      } catch {
-        return false;
-      }
+    const alreadyLogged = existing.trim().split("\n").filter(Boolean).some((line) => {
+      try { return JSON.parse(line).conductorIteration === metric.conductorIteration; } catch { return false; }
     });
     if (alreadyLogged) {
       console.log(`   ℹ Metric for conductor iteration ${metric.conductorIteration} already exists — skipping`);
       return;
     }
-    await writeFile(filePath, existing + JSON.stringify(metric) + "\n", "utf-8");
   } catch {
-    await writeFile(filePath, JSON.stringify(metric) + "\n", "utf-8");
+    // File doesn't exist yet — proceed to append
   }
+  await atomicAppendJsonl(filePath, metric);
 }
 
 // ── Conductor Story ──
@@ -568,7 +599,7 @@ async function recordSuccessPattern(
   const patternDir = path.join(SEA_ROOT, "success-patterns");
   await mkdir(patternDir, { recursive: true });
 
-  const slug = selection.suggestedExpertType.replace(/\s+/g, "-").toLowerCase();
+  const slug = selection.suggestedExpertType.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const fileName = `${selection.questionType}-${slug}-d${String(conductorIteration).padStart(2, "0")}.md`;
 
   const content = [

@@ -32,6 +32,7 @@ export async function createExpert(
   const candidates = findMatchingExperts(library, selection.questionType, selection.question, 3);
 
   let persona: string | null = null;
+  let adaptedFromHash: string | undefined;
 
   if (candidates.length > 0 && candidates[0].score > REUSE_THRESHOLD) {
     const top = candidates[0];
@@ -40,6 +41,7 @@ export async function createExpert(
     if (basePersona) {
       console.log(`   \u267b Adapting existing expert (${top.expertType}, score: ${top.score.toFixed(1)})`);
       persona = await adaptExistingPersona(basePersona, selection, projectDir, maxExpertIterations, iterStr);
+      adaptedFromHash = top.personaHash;
     }
   }
 
@@ -52,7 +54,7 @@ export async function createExpert(
   console.log(`   \u2713 Expert persona ready (${persona.split("\n").length} lines)`);
 
   // Select relevant findings for the expert's context
-  const relevantFindings = await selectRelevantFindings(projectDir, selection, 20);
+  const relevantFindings = await selectRelevantFindings(projectDir, selection, 10);
 
   // Build convergence criteria from the question
   const convergenceCriteria = [
@@ -73,6 +75,7 @@ export async function createExpert(
     projectDir,
     expertDir,
     questionType: selection.questionType,
+    adaptedFromHash,
   };
 }
 

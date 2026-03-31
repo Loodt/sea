@@ -179,6 +179,7 @@ export interface ExpertConfig {
   projectDir: string;
   expertDir: string;
   questionType: QuestionType;
+  adaptedFromHash?: string;
 }
 
 export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis";
@@ -235,6 +236,7 @@ export interface ConductorMetric {
   innerIterationsRun: number;
   timestamp: string;
   exhaustionReason?: ExhaustionReason;
+  questionType?: QuestionType;
 }
 
 /** Hard limits per conductor/expert step type — chars, not tokens. */
@@ -292,6 +294,7 @@ export interface LibraryEntry {
   personaPath: string;
   score: number;
   status: "active" | "retired";
+  adaptedFrom?: string;
 }
 
 // ── Utilities ──

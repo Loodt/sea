@@ -5,6 +5,42 @@ import { appendSpan } from "./metrics.js";
 import { readSummary, readFindings, readQuestions } from "./knowledge.js";
 import type { ExpertConfig, ExpertHandoff, Finding, Question } from "./types.js";
 
+/**
+ * Extract a section from a persona by heading name.
+ * Returns content between ## HEADING and the next ## heading (or EOF).
+ */
+function extractPersonaSection(persona: string, sectionName: string): string {
+  const pattern = new RegExp(
+    `^##\\s*${sectionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b[^\\n]*\\n`,
+    "im"
+  );
+  const match = persona.match(pattern);
+  if (!match || match.index === undefined) return "";
+
+  const startIdx = match.index + match[0].length;
+  const nextSection = persona.indexOf("\n## ", startIdx);
+  const endIdx = nextSection === -1 ? persona.length : nextSection;
+  return persona.slice(startIdx, endIdx).trim();
+}
+
+/**
+ * Compress findings into a compact context string for iter 1 prompts.
+ */
+function compressFindings(findings: Finding[], maxChars: number = 2000): string {
+  if (findings.length === 0) return "(No relevant findings provided)";
+
+  const lines = findings.map(
+    (f) => `- ${f.id}: [${f.tag}] ${f.claim.length > 80 ? f.claim.slice(0, 77) + "..." : f.claim} (${f.status})`
+  );
+  const raw = lines.join("\n");
+  if (raw.length <= maxChars) return raw;
+  // Truncate and note total count
+  const truncated = raw.slice(0, maxChars);
+  const lastNewline = truncated.lastIndexOf("\n");
+  return (lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated)
+    + `\n...(${findings.length} findings total, truncated)`;
+}
+
 /** Structured state passed between inner iterations (replaces crude 3KB truncation). */
 interface IterationState {
   findingsSoFar: string[];
@@ -167,21 +203,28 @@ async function assembleExpertPrompt(
   const isFirstIter = innerIter === 1;
   const isFinalIter = innerIter === config.maxIterations;
 
-  // First iteration: full context. Later iterations: structured state + delta only.
+  // First iteration: compact context with file reference to full persona.
+  // Full persona is at {expertDir}/persona.md — the subprocess reads it directly.
+  // Inline only the critical sections (convergence criteria, stage 1 workflow).
   if (isFirstIter) {
     const summary = await readSummary(config.projectDir);
-    const findingsContext = config.relevantFindings.length > 0
-      ? config.relevantFindings
-          .map((f) => `- ${f.id}: [${f.tag}] ${f.claim} (${f.status}, confidence: ${f.confidence})`)
-          .join("\n")
-      : "(No relevant findings provided)";
+    const findingsContext = compressFindings(config.relevantFindings);
 
-    return `You are a research expert. Follow your persona instructions precisely.
+    // Extract critical persona sections to inline
+    const convergence = extractPersonaSection(config.persona, "CONVERGENCE CRITERIA");
+    const workflow = extractPersonaSection(config.persona, "STAGED WORKFLOW");
+    // Extract just Stage 1 from the workflow (up to "Stage 2" or "### Stage 2")
+    const stage1Match = workflow.match(/^([\s\S]*?)(?=\n(?:###?\s*Stage\s*2|###?\s*STAGE\s*2))/i);
+    const stage1 = stage1Match ? stage1Match[1].trim() : workflow.slice(0, 500);
+    const antiHallucination = extractPersonaSection(config.persona, "ANTI-HALLUCINATION");
+
+    const personaPath = path.join(config.expertDir, "persona.md");
+
+    const assembled = `You are a research expert. Your full persona with workflow stages and domain knowledge is at:
+${personaPath}
+**Read that file first** before doing any research. It contains your identity, mental models, failure modes, and staged workflow.
 
 Your working directory is: ${config.projectDir}
-
-## YOUR PERSONA
-${config.persona}
 
 ## YOUR QUESTION
 ${config.question}
@@ -190,6 +233,13 @@ Question ID: ${config.questionId}
 ## ITERATION 1 of ${config.maxIterations}
 This is your FIRST iteration. Start with Stage 1 of your workflow (fast-kill check).
 
+## STAGE 1 (from your persona)
+${stage1 || "(Read Stage 1 from your persona file)"}
+
+## CONVERGENCE CRITERIA (from your persona)
+${convergence || "(Read convergence criteria from your persona file)"}
+
+${antiHallucination ? `## ANTI-HALLUCINATION RULES (from your persona)\n${antiHallucination}\n` : ""}
 ## CURRENT KNOWLEDGE SUMMARY
 ${summary || "(No prior knowledge in the store)"}
 
@@ -200,18 +250,19 @@ ${findingsContext}
 ${config.convergenceCriteria}
 
 ## INSTRUCTIONS
-1. Follow your persona's staged workflow. Begin with the fast-kill check.
-2. Use web search and web fetch to gather evidence. Tag every claim with its epistemic basis.
-3. After synthesizing, CHECK your key findings:
+1. Read your full persona from ${personaPath} — it contains your staged workflow, domain knowledge, and failure modes.
+2. Follow your persona's staged workflow. Begin with the fast-kill check.
+3. Use web search and web fetch to gather evidence. Tag every claim with its epistemic basis.
+4. After synthesizing, CHECK your key findings:
    - Does each finding have a source URL or derivation method?
    - Could any finding be wrong? What would that mean?
    - Are there contradictions with existing knowledge?
-4. Write findings incrementally to knowledge/findings.jsonl (append, don't overwrite):
+5. Write findings incrementally to knowledge/findings.jsonl (append, don't overwrite):
    Each line: {"id": "F{NNN}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": 1, "status": "provisional", "verifiedAt": null, "supersededBy": null}
    Use IDs starting from F901 to avoid collision with existing findings (the conductor will reassign IDs).
-5. Update knowledge/questions.jsonl if any open questions are resolved by your findings.
-6. Check convergence against your criteria. If you can determine a status (answered/killed/narrowed), include the HANDOFF block.
-7. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.
+6. Update knowledge/questions.jsonl if any open questions are resolved by your findings.
+7. Check convergence against your criteria. If you can determine a status (answered/killed/narrowed), include the HANDOFF block.
+8. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.
 
 ## HANDOFF FORMAT (include when converged or on final iteration)
 \`\`\`json
@@ -228,6 +279,12 @@ ${config.convergenceCriteria}
 }
 \`\`\`
 `;
+
+    if (assembled.length > 12_000) {
+      console.log(`   \u26a0 Iter 1 prompt is ${(assembled.length / 1024).toFixed(1)}KB — consider further reduction`);
+    }
+
+    return assembled;
   }
 
   // Subsequent iterations: leaner prompt with structured state

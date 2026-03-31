@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Finding, Question } from "./types.js";
+import { atomicAppendJsonl, atomicUpdateJsonl } from "./file-lock.js";
 
 // ── Paths ──
 
@@ -34,14 +35,7 @@ async function readJsonl<T>(filePath: string): Promise<T[]> {
 }
 
 async function appendJsonl<T>(filePath: string, entry: T): Promise<void> {
-  const dir = path.dirname(filePath);
-  await mkdir(dir, { recursive: true });
-  try {
-    const existing = await readFile(filePath, "utf-8");
-    await writeFile(filePath, existing + JSON.stringify(entry) + "\n", "utf-8");
-  } catch {
-    await writeFile(filePath, JSON.stringify(entry) + "\n", "utf-8");
-  }
+  await atomicAppendJsonl(filePath, entry);
 }
 
 async function writeJsonl<T>(filePath: string, entries: T[]): Promise<void> {
@@ -66,11 +60,12 @@ export async function updateFinding(
   id: string,
   update: Partial<Finding>
 ): Promise<void> {
-  const findings = await readFindings(projectDir);
-  const idx = findings.findIndex((f) => f.id === id);
-  if (idx === -1) return;
-  findings[idx] = { ...findings[idx], ...update };
-  await writeJsonl(findingsPath(projectDir), findings);
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), (findings) => {
+    const idx = findings.findIndex((f) => f.id === id);
+    if (idx === -1) return findings;
+    findings[idx] = { ...findings[idx], ...update };
+    return findings;
+  });
 }
 
 export function queryFindings(
@@ -106,11 +101,12 @@ export async function updateQuestion(
   id: string,
   update: Partial<Question>
 ): Promise<void> {
-  const questions = await readQuestions(projectDir);
-  const idx = questions.findIndex((q) => q.id === id);
-  if (idx === -1) return;
-  questions[idx] = { ...questions[idx], ...update };
-  await writeJsonl(questionsPath(projectDir), questions);
+  await atomicUpdateJsonl<Question>(questionsPath(projectDir), (questions) => {
+    const idx = questions.findIndex((q) => q.id === id);
+    if (idx === -1) return questions;
+    questions[idx] = { ...questions[idx], ...update };
+    return questions;
+  });
 }
 
 // ── Summary ──
@@ -121,6 +117,37 @@ export async function readSummary(projectDir: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+const SUMMARY_MAX_BYTES = 2048;
+
+/**
+ * Enforce the 2KB summary.md size limit. If over, regenerate from findings/questions.
+ */
+export async function enforceSummarySize(projectDir: string): Promise<boolean> {
+  let content: string;
+  try {
+    content = await readFile(summaryPath(projectDir), "utf-8");
+  } catch {
+    return false; // no summary yet
+  }
+
+  const bytes = Buffer.byteLength(content, "utf-8");
+  if (bytes <= SUMMARY_MAX_BYTES) return false;
+
+  console.log(`   \u26a0 summary.md is ${(bytes / 1024).toFixed(1)}KB — regenerating (max 2KB)`);
+
+  const findings = await readFindings(projectDir);
+  const questions = await readQuestions(projectDir);
+  const fallback = generateFallbackSummary(findings, questions);
+
+  const fallbackBytes = Buffer.byteLength(fallback, "utf-8");
+  const final = fallbackBytes <= SUMMARY_MAX_BYTES
+    ? fallback
+    : fallback.slice(0, SUMMARY_MAX_BYTES - 20) + "\n\n_(truncated)_";
+
+  await writeFile(summaryPath(projectDir), final, "utf-8");
+  return true;
 }
 
 /**
@@ -232,34 +259,31 @@ export async function graduateFindings(
   currentIteration: number,
   staleAfter: number = 3
 ): Promise<number> {
-  const findings = await readFindings(projectDir);
-  const refutedClaims = new Set(
-    findings.filter((f) => f.status === "refuted").map((f) => f.supersededBy)
-  );
-
   let graduated = 0;
-  let changed = false;
 
-  for (const f of findings) {
-    if (
-      f.status === "provisional" &&
-      f.confidence >= 0.85 &&
-      f.tag === "SOURCE" &&
-      f.source &&
-      f.source !== "null" &&
-      (currentIteration - f.iteration) >= staleAfter &&
-      !refutedClaims.has(f.id)
-    ) {
-      f.status = "verified";
-      f.verifiedAt = currentIteration;
-      graduated++;
-      changed = true;
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), (findings) => {
+    const refutedClaims = new Set(
+      findings.filter((f) => f.status === "refuted").map((f) => f.supersededBy)
+    );
+
+    for (const f of findings) {
+      if (
+        f.status === "provisional" &&
+        f.confidence >= 0.85 &&
+        f.tag === "SOURCE" &&
+        f.source &&
+        f.source !== "null" &&
+        (currentIteration - f.iteration) >= staleAfter &&
+        !refutedClaims.has(f.id)
+      ) {
+        f.status = "verified";
+        f.verifiedAt = currentIteration;
+        graduated++;
+      }
     }
-  }
 
-  if (changed) {
-    await writeJsonl(findingsPath(projectDir), findings);
-  }
+    return findings;
+  });
 
   return graduated;
 }
