@@ -8,5 +8,8 @@ projects/
 # Conductor evolution history (project-specific learning)
 conductor-history/
 
+# Experiment log (contains project-specific data)
+EXPERIMENTS.md
+
 # Claude Code local config
 .claude/settings.local.json
