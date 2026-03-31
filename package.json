@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli.ts",
-    "sea": "tsx src/cli.ts"
+    "sea": "tsx src/cli.ts",
+    "test": "vitest run"
   },
   "keywords": [
     "agent",
@@ -25,6 +26,7 @@
     "@types/node": "^25.5.0",
     "@types/proper-lockfile": "^4.1.4",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.2"
   }
 }
