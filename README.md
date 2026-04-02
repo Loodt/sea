@@ -187,7 +187,7 @@ sea/
   CLAUDE.md / AGENTS.md        THE CONDUCTOR - evolving playbook (provider-dependent)
   conductor-history/           every version of the conductor playbook
   failure-patterns/            cross-project failure library
-  success-patterns/            cross-project success library
+  success-patterns/            cross-project success library (gitignored — domain-specific)
   eval/
     rubrics.md                 5-dimension scoring rubrics
     integrity.md               10 truthfulness axioms (evolvable)

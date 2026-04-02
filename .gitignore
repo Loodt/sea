@@ -11,5 +11,10 @@ conductor-history/
 # Experiment log (contains project-specific data)
 EXPERIMENTS.md
 
+# Success/dispatch patterns (contain domain-specific project details)
+success-patterns/
+dispatch-patterns.md
+CLAUDE-history/
+
 # Claude Code local config
 .claude/settings.local.json
