@@ -1,3 +1,41 @@
+// ── Provider Layer ──
+
+export type Provider = "claude" | "codex";
+
+export interface ProviderConfig {
+  binary: string;
+  baseArgs: string[];
+  modelFlag: string;
+  instructionFile: string; // Auto-discovered by the CLI: CLAUDE.md vs AGENTS.md
+}
+
+export const PROVIDERS: Record<Provider, ProviderConfig> = {
+  claude: {
+    binary: "claude",
+    baseArgs: ["-p", "--output-format", "text", "--dangerously-skip-permissions"],
+    modelFlag: "--model",
+    instructionFile: "CLAUDE.md",
+  },
+  codex: {
+    binary: process.platform === "win32" ? "codex.cmd" : "codex",
+    baseArgs: ["-a", "never", "--search", "exec", "-", "--color", "never"],
+    modelFlag: "--model",
+    instructionFile: "AGENTS.md",
+  },
+};
+
+/** The preferred conductor filename for a given provider. */
+export function conductorFile(provider?: Provider): string {
+  return PROVIDERS[provider ?? "claude"].instructionFile;
+}
+
+/** All known conductor filenames, provider-preferred first. */
+export function conductorFileCandidates(provider?: Provider): string[] {
+  const preferred = conductorFile(provider);
+  const all = Object.values(PROVIDERS).map((p) => p.instructionFile);
+  return [preferred, ...all.filter((f) => f !== preferred)];
+}
+
 export interface ProjectState {
   name: string;
   iteration: number;
@@ -25,7 +63,7 @@ export interface Score {
 export interface LineageEntry {
   iteration: number;
   timestamp: string;
-  target: "persona.md" | "CLAUDE.md" | "pipeline.json";
+  target: "persona.md" | "CLAUDE.md" | "AGENTS.md" | "pipeline.json";
   versionBefore: string;
   versionAfter: string;
   changeType: string;
@@ -107,6 +145,7 @@ export interface LoopConfig {
   regressionThreshold: number;
   regressionWindow: number;
   evaluateModel?: string; // Use a different model for evaluate step (Axiom 1 separation)
+  provider?: Provider;
 }
 
 export const DEFAULT_LOOP_CONFIG: LoopConfig = {
@@ -180,6 +219,7 @@ export interface ExpertConfig {
   expertDir: string;
   questionType: QuestionType;
   adaptedFromHash?: string;
+  provider?: Provider;
 }
 
 export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis";
@@ -217,6 +257,7 @@ export interface ConductorConfig {
   maxExpertIterations: number;
   metaEveryN: number;
   evaluateModel?: string; // Use a different model for evaluate step (Axiom 1 separation)
+  provider?: Provider;
 }
 
 export const DEFAULT_CONDUCTOR_CONFIG: ConductorConfig = {

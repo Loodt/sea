@@ -1,7 +1,7 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import type { StepType, ProjectState, Score, PipelineConfig } from "./types.js";
-import { CONTEXT_BUDGETS, DEFAULT_PIPELINE } from "./types.js";
+import type { StepType, ProjectState, Score, PipelineConfig, Provider } from "./types.js";
+import { CONTEXT_BUDGETS, DEFAULT_PIPELINE, conductorFile, conductorFileCandidates } from "./types.js";
 import { getIntegritySnippets } from "./integrity.js";
 import { readSummary, readFindings, readQuestions, informationGain } from "./knowledge.js";
 import { readScores } from "./metrics.js";
@@ -16,6 +16,15 @@ async function safeRead(filePath: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+/** Read conductor playbook, trying provider's preferred file then falling back. */
+async function readConductorPlaybook(provider?: Provider): Promise<string> {
+  for (const name of conductorFileCandidates(provider)) {
+    const content = await safeRead(path.join(SEA_ROOT, name));
+    if (content) return content;
+  }
+  return "";
 }
 
 async function readJsonl<T>(filePath: string): Promise<T[]> {
@@ -92,10 +101,11 @@ export async function loadPipeline(projectDir: string): Promise<PipelineConfig> 
 
 export async function assemblePrompt(
   step: StepType,
-  projectName: string
+  projectName: string,
+  provider?: Provider
 ): Promise<string> {
   const projectDir = path.join(SEA_ROOT, "projects", projectName);
-  const conductor = await safeRead(path.join(SEA_ROOT, "CLAUDE.md"));
+  const conductor = await readConductorPlaybook(provider);
   const persona = await safeRead(path.join(projectDir, "persona.md"));
   const goal = await safeRead(path.join(projectDir, "goal.md"));
   const state: ProjectState = JSON.parse(
@@ -124,7 +134,7 @@ export async function assemblePrompt(
       prompt = await assembleSummarize(state, projectDir);
       break;
     case "meta":
-      prompt = await assembleMeta(conductor);
+      prompt = await assembleMeta(conductor, conductorFile(provider));
       break;
     default:
       throw new Error(`Unknown step: ${step}`);
@@ -590,7 +600,7 @@ ${evalBrief ? `## Previous Evaluation Summary (for question resolution context)\
 // ── META ──
 // Reads: lineage across projects, integrity principles, score trends
 
-async function assembleMeta(conductor: string): Promise<string> {
+async function assembleMeta(conductor: string, filename: string = "CLAUDE.md"): Promise<string> {
   const metaProtocol = extractSection(conductor, "Meta-Evolution Protocol");
 
   const projectsDir = path.join(SEA_ROOT, "projects");
@@ -646,9 +656,9 @@ ${Object.keys(allScoreTrends).length > 0 ? JSON.stringify(allScoreTrends, null, 
 2. What evaluation/evolution strategies are working?
 3. What conductor protocols need improvement?
 4. Are the integrity principles being addressed? Which should be woven deeper?
-5. Propose specific changes to CLAUDE.md (the versioner will preserve the old one)
+5. Propose specific changes to ${filename} (the versioner will preserve the old one)
 6. IMPORTANT: Do NOT modify the "Safety Rails" section — it is immutable
-7. Write the updated CLAUDE.md
+7. Write the updated ${filename}
 8. Explain every change and why it will compound across future projects
 `;
 }

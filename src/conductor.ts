@@ -5,7 +5,7 @@ import { createExpert } from "./expert-factory.js";
 import { runExpertLoop } from "./expert-loop.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
-import { readFindings, readQuestions, graduateFindings, enforceSummarySize } from "./knowledge.js";
+import { readFindings, readQuestions, graduateFindings, enforceSummarySize, deduplicateFindings, aggregateReferences } from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
   assembleHandoffIntegrationPrompt,
@@ -23,9 +23,21 @@ import type {
   QuestionType,
   Span,
 } from "./types.js";
-import { DEFAULT_CONDUCTOR_CONFIG, QUESTION_TYPE_ITERATION_CAP } from "./types.js";
+import { existsSync } from "node:fs";
+import { DEFAULT_CONDUCTOR_CONFIG, QUESTION_TYPE_ITERATION_CAP, conductorFile, conductorFileCandidates } from "./types.js";
+
+import type { Provider } from "./types.js";
 
 const SEA_ROOT = process.cwd();
+
+/** Resolve the conductor playbook path, falling back across providers. */
+function resolveConductorPath(provider?: Provider): string {
+  for (const name of conductorFileCandidates(provider)) {
+    const p = path.join(SEA_ROOT, name);
+    if (existsSync(p)) return p;
+  }
+  return path.join(SEA_ROOT, conductorFile(provider));
+}
 
 let stopping = false;
 
@@ -73,7 +85,7 @@ export async function runConductorIteration(
   // Step 1: Select question
   console.log("📋 SELECT — choosing highest-value question...");
   const selectStart = Date.now();
-  const selection = await selectQuestion(projectDir, cIter, state.questionsExhausted);
+  const selection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}-select`,
     step: "select-question",
@@ -95,7 +107,7 @@ export async function runConductorIteration(
     console.log(`   Question type "${selection.questionType}" → capped at ${effectiveMaxIter} iterations`);
   }
   const createStart = Date.now();
-  const expertConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter);
+  const expertConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter, config.provider);
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}-create`,
     step: "create-expert",
@@ -119,7 +131,7 @@ export async function runConductorIteration(
 
   if (handoff.status === "crashed" && handoff.findings.length === 0) {
     console.log(`\n🔄 RETRY — expert crashed with no findings, retrying with fresh persona...`);
-    const retryConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter);
+    const retryConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter, config.provider);
     await writeFile(
       path.join(retryConfig.expertDir, "persona.md"),
       retryConfig.persona,
@@ -146,14 +158,26 @@ export async function runConductorIteration(
     metadata: { status: handoff.status, iterationsRun: handoff.iterationsRun },
   });
 
+  // Increment expert dispatch count immediately (survives integration crashes)
+  await incrementExpertDispatches(projectDir);
+
   // Step 4: Integrate handoff (skip for zero-finding crashes)
   const integrateStart = Date.now();
   if (handoff.status === "crashed" && handoff.findings.length === 0) {
     console.log("\n📥 INTEGRATE — skipped (crash with no findings)");
   } else {
     console.log("\n📥 INTEGRATE — merging results into knowledge store...");
-    await integrateHandoff(projectDir, handoff, cIter);
+    await integrateHandoff(projectDir, handoff, cIter, config);
     await enforceSummarySize(projectDir);
+
+    // Deduplicate findings (expert writes directly + integration may re-append)
+    const deduped = await deduplicateFindings(projectDir);
+    if (deduped > 0) {
+      console.log(`   ✓ Deduplicated ${deduped} findings from knowledge store`);
+    }
+
+    // Aggregate source URLs into references/links.md
+    await aggregateReferences(projectDir);
   }
 
   // Compute dispatch-level delta (captures findings written by expert + integration)
@@ -288,18 +312,20 @@ export async function runConductorLoop(
     if (state.conductorIteration % config.metaEveryN === 0) {
       console.log("\n🧠 META — evolving conductor...");
       await snapshotFile(
-        path.join(SEA_ROOT, "CLAUDE.md"),
+        resolveConductorPath(config.provider),
         path.join(SEA_ROOT, "conductor-history")
       );
       const metaPrompt = await assembleConductorMetaPrompt(
         path.join(SEA_ROOT, "projects", projectName),
-        state.conductorIteration
+        state.conductorIteration,
+        config.provider
       );
       await runAndTrace(
         metaPrompt,
         SEA_ROOT,
         path.join(SEA_ROOT, "projects", projectName, "traces"),
-        `conductor-${String(state.conductorIteration).padStart(3, "0")}-meta`
+        `conductor-${String(state.conductorIteration).padStart(3, "0")}-meta`,
+        config.provider ? { provider: config.provider } : undefined
       );
       console.log("   ✓ Conductor updated");
     }
@@ -318,7 +344,8 @@ export async function runConductorLoop(
 async function selectQuestion(
   projectDir: string,
   conductorIteration: number,
-  exhaustedQuestionIds: string[]
+  exhaustedQuestionIds: string[],
+  config?: ConductorConfig
 ): Promise<QuestionSelection> {
   const prompt = await assembleQuestionSelectionPrompt(
     projectDir,
@@ -330,7 +357,8 @@ async function selectQuestion(
     prompt,
     projectDir,
     path.join(projectDir, "traces"),
-    `conductor-${String(conductorIteration).padStart(3, "0")}-select`
+    `conductor-${String(conductorIteration).padStart(3, "0")}-select`,
+    config?.provider ? { provider: config.provider } : undefined
   );
 
   // Parse QuestionSelection from output
@@ -400,7 +428,8 @@ function buildSelection(parsed: Record<string, unknown>): QuestionSelection {
 async function integrateHandoff(
   projectDir: string,
   handoff: ExpertHandoff,
-  conductorIteration: number
+  conductorIteration: number,
+  config?: ConductorConfig
 ): Promise<void> {
   const prompt = await assembleHandoffIntegrationPrompt(projectDir, handoff);
   const iterStr = String(conductorIteration).padStart(3, "0");
@@ -409,7 +438,8 @@ async function integrateHandoff(
     prompt,
     projectDir,
     path.join(projectDir, "traces"),
-    `conductor-${iterStr}-integrate`
+    `conductor-${iterStr}-integrate`,
+    config?.provider ? { provider: config.provider } : undefined
   );
 
   if (result.exitCode !== 0) {
@@ -436,6 +466,21 @@ async function readConductorState(projectDir: string): Promise<ConductorState> {
   };
 }
 
+/**
+ * Increment totalExpertDispatches immediately after expert dispatch.
+ * Separated from advanceConductorState so it survives integration crashes.
+ */
+async function incrementExpertDispatches(projectDir: string): Promise<void> {
+  const state = await readConductorState(projectDir);
+  state.totalExpertDispatches += 1;
+  state.updatedAt = new Date().toISOString();
+  await writeFile(
+    path.join(projectDir, "state.json"),
+    JSON.stringify(state, null, 2),
+    "utf-8"
+  );
+}
+
 async function advanceConductorState(
   projectDir: string,
   handoff: ExpertHandoff
@@ -443,7 +488,7 @@ async function advanceConductorState(
   const state = await readConductorState(projectDir);
 
   state.conductorIteration += 1;
-  state.totalExpertDispatches += 1;
+  // totalExpertDispatches already incremented by incrementExpertDispatches()
   state.activeQuestionId = null;
   state.updatedAt = new Date().toISOString();
 

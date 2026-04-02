@@ -82,7 +82,8 @@ export async function runExpertLoop(config: ExpertConfig): Promise<ExpertHandoff
       prompt,
       config.projectDir,
       config.expertDir,
-      `expert-iter-${iterStr}`
+      `expert-iter-${iterStr}`,
+      config.provider ? { provider: config.provider } : undefined
     );
 
     // Emit structured span

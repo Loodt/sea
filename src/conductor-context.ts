@@ -1,7 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { readSummary, readFindings, readQuestions, findingCounts } from "./knowledge.js";
-import type { ExpertHandoff, Question, Finding } from "./types.js";
+import type { ExpertHandoff, Question, Finding, Provider } from "./types.js";
+import { conductorFile, conductorFileCandidates } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -13,6 +14,15 @@ async function safeRead(filePath: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+/** Read conductor playbook, trying provider's preferred file then falling back. */
+async function readConductorPlaybook(provider?: Provider): Promise<string> {
+  for (const name of conductorFileCandidates(provider)) {
+    const content = await safeRead(path.join(SEA_ROOT, name));
+    if (content) return content;
+  }
+  return "";
 }
 
 function truncate(text: string, maxChars: number): string {
@@ -199,7 +209,9 @@ This dispatch exhausted — the negative result IS knowledge. Create a synthetic
 - Add context about the implication for the research frontier
 - This prevents future dispatches from re-investigating the same gap
 ` : ""}### 2. Integrate findings into the knowledge store
-For each finding in the handoff:
+The expert may have already written findings directly to knowledge/findings.jsonl during research.
+Check existing findings BEFORE appending — do NOT re-append findings whose claim text already exists in the file.
+For genuinely new findings only:
 - Assign a proper sequential ID (next after F${String(counts.total).padStart(3, "0")})
 - Append to knowledge/findings.jsonl
 - If a finding confirms an existing provisional finding, update the existing one to "verified"
@@ -245,9 +257,11 @@ After integration, output a brief integration report:
  */
 export async function assembleConductorMetaPrompt(
   projectDir: string,
-  conductorIteration: number
+  conductorIteration: number,
+  provider?: Provider
 ): Promise<string> {
-  const conductor = await safeRead(path.join(SEA_ROOT, "CLAUDE.md"));
+  const filename = conductorFile(provider);
+  const conductor = await readConductorPlaybook(provider);
   const integrity = await safeRead(path.join(SEA_ROOT, "eval", "integrity.md"));
 
   // Read conductor metrics if they exist
@@ -297,12 +311,12 @@ ${allLineage.length > 0 ? allLineage.join("\n\n") : "No lineage yet."}
 2. What expert types are producing high-value results?
 3. Are questions being selected well? Any patterns of exhausted dispatches?
 4. Is the knowledge store growing effectively?
-5. Propose specific improvements to CLAUDE.md
+5. Propose specific improvements to ${filename}
 6. Do NOT modify the "Safety Rails" section — it is immutable
-7. Write the updated CLAUDE.md (the versioner will preserve the old one)
+7. Write the updated ${filename} (the versioner will preserve the old one)
 
 ## CONDUCTOR SIZE BUDGET
-CLAUDE.md is currently ${conductorLines} lines. The hard limit is 150 lines.
+${filename} is currently ${conductorLines} lines. The hard limit is 150 lines.
 ${conductorLines > 120 ? `\n⚠ CONSOLIDATION REQUIRED (${conductorLines} > 120 lines). Before adding ANY new content:\n- Remove resolved infrastructure debt items\n- Move dispatch pattern observations to a separate file (NOT loaded into agent context)\n- Merge overlapping rules\n- Remove pipeline-mode-only rules if no active pipeline-mode projects exist\n- Every line must earn its place — cut observational notes that don't change behavior` : ""}
 ${conductorLines > 150 ? `\n🛑 OVER LIMIT. You MUST reduce to ≤150 lines. No new content until consolidated.` : ""}
 `;

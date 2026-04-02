@@ -3,7 +3,7 @@ import path from "node:path";
 import { runAndTrace } from "./runner.js";
 import { readSummary, readFindings, queryFindings } from "./knowledge.js";
 import { readLibrary, findMatchingExperts, hashPersona } from "./expert-library.js";
-import type { ExpertConfig, QuestionSelection, Finding } from "./types.js";
+import type { ExpertConfig, QuestionSelection, Finding, Provider } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -21,7 +21,8 @@ export async function createExpert(
   selection: QuestionSelection,
   projectDir: string,
   conductorIteration: number,
-  maxExpertIterations: number
+  maxExpertIterations: number,
+  provider?: Provider
 ): Promise<ExpertConfig> {
   const iterStr = String(conductorIteration).padStart(3, "0");
   const expertDir = path.join(projectDir, "experts", `Q${selection.questionId}-iter-${iterStr}`);
@@ -40,13 +41,13 @@ export async function createExpert(
     const basePersona = await safeRead(basePath);
     if (basePersona) {
       console.log(`   \u267b Adapting existing expert (${top.expertType}, score: ${top.score.toFixed(1)})`);
-      persona = await adaptExistingPersona(basePersona, selection, projectDir, maxExpertIterations, iterStr);
+      persona = await adaptExistingPersona(basePersona, selection, projectDir, maxExpertIterations, iterStr, provider);
       adaptedFromHash = top.personaHash;
     }
   }
 
   if (!persona) {
-    persona = await createFreshPersona(selection, projectDir, maxExpertIterations, iterStr);
+    persona = await createFreshPersona(selection, projectDir, maxExpertIterations, iterStr, provider);
   }
 
   // Save persona for auditing
@@ -76,6 +77,7 @@ export async function createExpert(
     expertDir,
     questionType: selection.questionType,
     adaptedFromHash,
+    provider,
   };
 }
 
@@ -86,7 +88,8 @@ async function createFreshPersona(
   selection: QuestionSelection,
   projectDir: string,
   maxExpertIterations: number,
-  iterStr: string
+  iterStr: string,
+  provider?: Provider
 ): Promise<string> {
   const prompt = await assembleExpertCreationPrompt(selection, projectDir, maxExpertIterations);
 
@@ -95,7 +98,8 @@ async function createFreshPersona(
     prompt,
     projectDir,
     path.join(projectDir, "traces"),
-    `conductor-${iterStr}-create-expert`
+    `conductor-${iterStr}-create-expert`,
+    provider ? { provider } : undefined
   );
 
   if (result.exitCode !== 0) {
@@ -118,7 +122,8 @@ async function adaptExistingPersona(
   selection: QuestionSelection,
   projectDir: string,
   maxExpertIterations: number,
-  iterStr: string
+  iterStr: string,
+  provider?: Provider
 ): Promise<string> {
   const summary = await readSummary(projectDir);
   const prompt = `You are an expert persona adaptation agent. You have a proven expert persona that performed well on a similar question type. Adapt it for a new question.
@@ -150,14 +155,15 @@ Wrap the adapted persona between ===PERSONA_START=== and ===PERSONA_END=== delim
     prompt,
     projectDir,
     path.join(projectDir, "traces"),
-    `conductor-${iterStr}-adapt-expert`
+    `conductor-${iterStr}-adapt-expert`,
+    provider ? { provider } : undefined
   );
 
   const persona = extractPersonaFromOutput(result.stdout);
   if (!persona) {
     // Adaptation failed — fall back to fresh creation
     console.log("   \u26a0 Adaptation failed, falling back to fresh creation");
-    return createFreshPersona(selection, projectDir, maxExpertIterations, iterStr);
+    return createFreshPersona(selection, projectDir, maxExpertIterations, iterStr, provider);
   }
   return persona;
 }

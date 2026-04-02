@@ -29,21 +29,21 @@ Terminal
         |
         |  OUTER LOOP (Conductor)
         |
-        |-- claude -p "SELECT..."       reads knowledge frontier
+        |-- LLM "SELECT..."            reads knowledge frontier
         |   picks highest-value          ranks by info gain, feasibility,
         |   open question                domain data density
         |
-        |-- claude -p "CREATE..."       fresh 200k context
+        |-- LLM "CREATE..."            fresh context window
         |   crafts expert persona        200-300 lines, 6-section anatomy
         |   from creation framework      the "80% investment"
         |
         |   INNER LOOP (Expert)
-        |   |-- claude -p "RESEARCH..."  1-5 iterations
+        |   |-- LLM "RESEARCH..."       1-5 iterations
         |   |   plan → search → synth    until convergence or exhaustion
         |   |   writes findings           epistemic tags on every claim
         |   '-- converge? loop or exit
         |
-        |-- claude -p "INTEGRATE..."    validates + persists
+        |-- LLM "INTEGRATE..."         validates + persists
         |   merges into knowledge store  deduplicates, checks contradictions
         |   updates summary              tracks goal progress
         |
@@ -74,10 +74,10 @@ Terminal
 
 | Layer | File | Evolves | Purpose |
 |-------|------|---------|---------|
-| **Conductor** | `CLAUDE.md` | Every ~3-5 iterations | Orchestration protocols, meta-strategies |
+| **Conductor** | `CLAUDE.md` or `AGENTS.md` | Every ~3-5 iterations | Orchestration protocols, meta-strategies |
 | **Expert Persona** | `projects/{name}/persona.md` | Every iteration | Domain expertise, heuristics, strategies |
 
-The conductor learns meta-lessons slowly across projects. Expert personas adapt rapidly to each project's domain.
+The conductor learns meta-lessons slowly across projects. Expert personas adapt rapidly to each project's domain. The conductor playbook filename matches the active provider (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex).
 
 ## Recent improvements (v0.2)
 
@@ -96,7 +96,9 @@ Five improvements validated on sewage-gold research project (5 conductor dispatc
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) 20+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` command available)
+- At least one supported LLM CLI:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` command) — default
+  - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex` command)
 
 ### Install
 
@@ -159,6 +161,10 @@ sea status [project]                 # show current state and scores
 sea history <project>                # evolution timeline with scores
 sea rollback <project> [version]     # restore persona to earlier version
 sea rollback conductor [version]     # restore conductor to earlier version
+
+# Use a different provider
+sea --provider codex conduct <project>
+SEA_PROVIDER=codex sea conduct <project>
 ```
 
 Replace `sea` with `npx tsx src/cli.ts` until you build and link globally.
@@ -167,6 +173,7 @@ Replace `sea` with `npx tsx src/cli.ts` until you build and link globally.
 
 | Flag | Commands | Default | Purpose |
 |------|----------|---------|---------|
+| `--provider <name>` | all | claude | LLM backend: `claude` or `codex` |
 | `-c, --cooldown <seconds>` | conduct, loop | 30 | Pause between iterations |
 | `-m, --max <n>` | conduct, loop | unlimited | Stop after N iterations |
 | `-e, --expert-max <n>` | conduct, dispatch | 5 | Max expert inner iterations |
@@ -177,8 +184,8 @@ Replace `sea` with `npx tsx src/cli.ts` until you build and link globally.
 
 ```
 sea/
-  CLAUDE.md                    THE CONDUCTOR - evolving playbook
-  conductor-history/           every version of CLAUDE.md
+  CLAUDE.md / AGENTS.md        THE CONDUCTOR - evolving playbook (provider-dependent)
+  conductor-history/           every version of the conductor playbook
   failure-patterns/            cross-project failure library
   success-patterns/            cross-project success library
   eval/
@@ -196,7 +203,7 @@ sea/
     context.ts                 prompt assembly for pipeline steps
     conductor-context.ts       prompt assembly for conductor steps
     metrics.ts                 scores + spans
-    runner.ts                  spawn claude -p sessions
+    runner.ts                  spawn LLM CLI sessions (claude/codex)
     loop.ts                    pipeline iteration flow
     safety.ts                  regression detection + rollback
     versioner.ts               snapshot/restore
@@ -255,17 +262,26 @@ If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the
 - **Kill fast, invest slow.** Question types have iteration caps (data-hunt: 3, synthesis: 2) to prevent wasted iterations.
 - **Learn bidirectionally.** Both failure patterns AND success patterns feed into expert creation.
 
-## Running with Claude Code
+## Running SEA
 
-SEA is built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Every step spawns a fresh `claude -p` session with its own context window. The TypeScript CLI orchestrates files and the loop — all intelligence lives in the Claude sessions.
+SEA spawns LLM CLI sessions for each step — every session gets a fresh context window. The TypeScript CLI orchestrates files and the loop; all intelligence lives in the LLM sessions.
+
+### Supported providers
+
+| Provider | CLI | Conductor playbook | Example |
+|----------|-----|-------------------|---------|
+| **Claude Code** (default) | `claude -p` | `CLAUDE.md` | `sea conduct my-project` |
+| **OpenAI Codex** | `codex exec` | `AGENTS.md` | `sea --provider codex conduct my-project` |
+
+When switching providers on an existing project, the conductor playbook is read from whichever file exists (falls back across providers). The first meta-evolution step writes the playbook to the new provider's native filename.
 
 ### The simplest way to start
 
-Open Claude Code in the `sea/` directory:
+Open Claude Code (or Codex) in the `sea/` directory:
 
 ```
 cd sea
-claude
+claude         # or: codex
 ```
 
 Then:
@@ -280,7 +296,7 @@ batteries at >90% recovery rate. Compare hydrometallurgical vs
 pyrometallurgical vs direct recycling routes.
 ```
 
-Claude Code will run `sea new` interactively, then start the conductor loop.
+The LLM will run `sea new` interactively, then start the conductor loop.
 
 ### Monitoring
 

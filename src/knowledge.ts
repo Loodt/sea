@@ -289,6 +289,79 @@ export async function graduateFindings(
 }
 
 /**
+ * Deduplicate findings.jsonl by claim text and fix duplicate IDs.
+ * Keeps the first occurrence of each claim (case-insensitive, trimmed).
+ * Reassigns IDs sequentially when duplicates are found to fix ID collisions.
+ * Returns count of removed duplicates.
+ */
+export async function deduplicateFindings(projectDir: string): Promise<number> {
+  let removed = 0;
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), (findings) => {
+    // Step 1: Remove claim-text duplicates
+    const seen = new Set<string>();
+    const deduped: Finding[] = [];
+    for (const f of findings) {
+      const key = f.claim.trim().toLowerCase();
+      if (seen.has(key)) {
+        removed++;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(f);
+    }
+
+    // Step 2: Fix duplicate IDs by reassigning sequentially
+    const idCounts = new Map<string, number>();
+    for (const f of deduped) {
+      idCounts.set(f.id, (idCounts.get(f.id) ?? 0) + 1);
+    }
+    const hasDupeIds = [...idCounts.values()].some((c) => c > 1);
+    if (hasDupeIds) {
+      // Find the highest non-F9XX ID to continue from
+      let maxNum = 0;
+      for (const f of deduped) {
+        const m = f.id.match(/^F(\d+)$/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          if (n < 900 && n > maxNum) maxNum = n;
+        }
+      }
+      // Reassign all IDs sequentially
+      let nextId = maxNum + 1;
+      for (const f of deduped) {
+        f.id = `F${String(nextId).padStart(3, "0")}`;
+        nextId++;
+      }
+    }
+
+    return deduped;
+  });
+  return removed;
+}
+
+/**
+ * Aggregate all source URLs from findings.jsonl into references/links.md.
+ * Overwrites links.md with deduplicated, sorted URL list.
+ * Returns count of unique URLs written.
+ */
+export async function aggregateReferences(projectDir: string): Promise<number> {
+  const findings = await readFindings(projectDir);
+  const urls = new Set<string>();
+  for (const f of findings) {
+    if (f.source && f.source !== "null" && f.source.startsWith("http")) {
+      urls.add(f.source);
+    }
+  }
+
+  const refsDir = path.join(projectDir, "references");
+  await mkdir(refsDir, { recursive: true });
+  const linksFile = path.join(refsDir, "links.md");
+  const content = `# References\n\n${[...urls].sort().map((u) => `- ${u}`).join("\n")}\n`;
+  await writeFile(linksFile, content, "utf-8");
+  return urls.size;
+}
+
+/**
  * Compute accurate counts from findings.jsonl (not from summary.md).
  */
 export function findingCounts(findings: Finding[]): {

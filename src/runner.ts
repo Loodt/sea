@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Provider } from "./types.js";
+import { PROVIDERS } from "./types.js";
 
 export interface RunResult {
   stdout: string;
@@ -13,14 +15,30 @@ export interface RunResult {
 
 export interface RunOptions {
   timeoutMs?: number;
-  model?: string; // e.g. "sonnet", "opus", "claude-sonnet-4-6"
+  model?: string; // e.g. "sonnet", "opus", "claude-sonnet-4-6", "o4-mini"
+  provider?: Provider;
 }
 
 /**
- * Spawn a `claude -p` session with the given prompt.
- * Pipes prompt via stdin. Each session gets a fresh context window.
+ * Build the binary name and argument list for a provider session.
+ * Exported for testing.
  */
-export async function runClaudeSession(
+export function buildSpawnArgs(opts?: RunOptions): { binary: string; args: string[] } {
+  const cfg = PROVIDERS[opts?.provider ?? "claude"];
+  const args = [...cfg.baseArgs];
+  if (opts?.model) args.push(cfg.modelFlag, opts.model);
+  if (process.platform === "win32" && cfg.binary.toLowerCase().endsWith(".cmd")) {
+    return { binary: "cmd.exe", args: ["/d", "/s", "/c", cfg.binary, ...args] };
+  }
+  return { binary: cfg.binary, args };
+}
+
+/**
+ * Spawn an LLM CLI session with the given prompt.
+ * Pipes prompt via stdin. Each session gets a fresh context window.
+ * Supports multiple providers (claude, codex) via RunOptions.provider.
+ */
+export async function runSession(
   prompt: string,
   cwd: string,
   opts?: RunOptions
@@ -30,10 +48,9 @@ export async function runClaudeSession(
   const startMs = Date.now();
 
   return new Promise((resolve, reject) => {
-    const args = ["-p", "--output-format", "text", "--dangerously-skip-permissions"];
-    if (opts?.model) args.push("--model", opts.model);
+    const { binary, args } = buildSpawnArgs(opts);
 
-    const child = spawn("claude", args, {
+    const child = spawn(binary, args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       timeout: timeoutMs,
@@ -66,8 +83,11 @@ export async function runClaudeSession(
   });
 }
 
+/** @deprecated Use runSession */
+export const runClaudeSession = runSession;
+
 /**
- * Run a Claude session and save the output to a trace file.
+ * Run an LLM session and save the output to a trace file.
  */
 export async function runAndTrace(
   prompt: string,
@@ -78,15 +98,17 @@ export async function runAndTrace(
 ): Promise<RunResult> {
   await mkdir(traceDir, { recursive: true });
 
-  const result = await runClaudeSession(prompt, cwd, opts);
+  const result = await runSession(prompt, cwd, opts);
 
   const promptChars = prompt.length;
   const estimatedTokens = Math.ceil(promptChars / 4);
+  const provider = opts?.provider ?? "claude";
 
   const traceContent = [
     `# Trace: ${traceName}`,
     ``,
     `- Timestamp: ${result.startTime}`,
+    `- Provider: ${provider}`,
     `- Exit code: ${result.exitCode}`,
     `- Duration: ${result.durationMs}ms`,
     `- Prompt size: ${(promptChars / 1024).toFixed(1)}KB (${promptChars} chars, ~${estimatedTokens} tokens)`,

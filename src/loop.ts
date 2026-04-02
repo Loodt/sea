@@ -12,10 +12,21 @@ import {
 import { checkAndRollback, advanceIteration } from "./safety.js";
 import { initKnowledge, readFindings, readQuestions, informationGain } from "./knowledge.js";
 import { appendSpan } from "./metrics.js";
-import type { ProjectState, LoopConfig, PipelineStep, Score, Span } from "./types.js";
-import { DEFAULT_LOOP_CONFIG, padVersion } from "./types.js";
+import { existsSync } from "node:fs";
+import type { ProjectState, LoopConfig, PipelineStep, Score, Span, Provider } from "./types.js";
+import { DEFAULT_LOOP_CONFIG, padVersion, conductorFile, conductorFileCandidates } from "./types.js";
 
 const SEA_ROOT = process.cwd();
+
+/** Resolve the conductor playbook path, falling back across providers. */
+function resolveConductorPath(provider?: Provider): string {
+  for (const name of conductorFileCandidates(provider)) {
+    const p = path.join(SEA_ROOT, name);
+    if (existsSync(p)) return p;
+  }
+  // Fallback to provider's preferred (will be created by meta-evolution)
+  return path.join(SEA_ROOT, conductorFile(provider));
+}
 
 let stopping = false;
 
@@ -105,12 +116,13 @@ async function runStep(
 
   console.log(labels[step.type] ?? `▶ ${step.type}...`);
 
-  const prompt = await assemblePrompt(step.type, projectName);
+  const prompt = await assemblePrompt(step.type, projectName, config?.provider);
 
   // Axiom 1: evaluate step can use a different model
-  const runOpts = step.type === "evaluate" && config?.evaluateModel
-    ? { model: config.evaluateModel }
-    : undefined;
+  const runOpts = {
+    ...(config?.provider ? { provider: config.provider } : {}),
+    ...(step.type === "evaluate" && config?.evaluateModel ? { model: config.evaluateModel } : {}),
+  };
 
   const result = await runAndTrace(
     prompt,
@@ -219,16 +231,17 @@ export async function runLoop(
       console.log("\n🧠 META — evolving conductor...");
 
       await snapshotFile(
-        path.join(SEA_ROOT, "CLAUDE.md"),
+        resolveConductorPath(config.provider),
         path.join(SEA_ROOT, "conductor-history")
       );
 
-      const metaPrompt = await assemblePrompt("meta", projectName);
+      const metaPrompt = await assemblePrompt("meta", projectName, config.provider);
       await runAndTrace(
         metaPrompt,
         SEA_ROOT,
         path.join(projectDir, "traces"),
-        `iter-${String(state.iteration - 1).padStart(3, "0")}-meta`
+        `iter-${String(state.iteration - 1).padStart(3, "0")}-meta`,
+        config.provider ? { provider: config.provider } : undefined
       );
       console.log("   ✓ Conductor updated");
     }

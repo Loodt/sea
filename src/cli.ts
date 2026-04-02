@@ -8,15 +8,25 @@ import { runIteration, runLoop } from "./loop.js";
 import { runConductorIteration, runConductorLoop } from "./conductor.js";
 import { restoreVersion, getCurrentVersion } from "./versioner.js";
 import { readScores } from "./metrics.js";
-import type { ProjectState, LoopConfig, ConductorConfig, ConductorState } from "./types.js";
-import { DEFAULT_LOOP_CONFIG, DEFAULT_CONDUCTOR_CONFIG, padVersion } from "./types.js";
+import type { ProjectState, LoopConfig, ConductorConfig, ConductorState, Provider } from "./types.js";
+import { DEFAULT_LOOP_CONFIG, DEFAULT_CONDUCTOR_CONFIG, PROVIDERS, padVersion, conductorFile } from "./types.js";
 
 const program = new Command();
 
 program
   .name("sea")
   .description("SEA — Self-Evolving Agent")
-  .version("0.1.0");
+  .version("0.1.0")
+  .option("--provider <provider>", "LLM provider: claude or codex", process.env.SEA_PROVIDER ?? "claude");
+
+function resolveProvider(): Provider {
+  const p = program.opts().provider;
+  if (!(p in PROVIDERS)) {
+    console.error(`Unknown provider: "${p}". Valid: ${Object.keys(PROVIDERS).join(", ")}`);
+    process.exit(1);
+  }
+  return p as Provider;
+}
 
 // ── sea new <project> ──
 program
@@ -34,6 +44,7 @@ program
   .action(async (project: string, opts) => {
     const config: LoopConfig = {
       ...DEFAULT_LOOP_CONFIG,
+      provider: resolveProvider(),
       ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runIteration(project, config);
@@ -53,6 +64,7 @@ program
       cooldownMs: parseFloat(opts.cooldown) * 1000,
       maxIterations: opts.max === "Infinity" ? Infinity : parseInt(opts.max, 10),
       metaEveryN: parseInt(opts.metaEvery, 10),
+      provider: resolveProvider(),
       ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runLoop(project, config);
@@ -75,6 +87,7 @@ program
         opts.max === "Infinity" ? Infinity : parseInt(opts.max, 10),
       maxExpertIterations: parseInt(opts.expertMax, 10),
       metaEveryN: parseInt(opts.metaEvery, 10),
+      provider: resolveProvider(),
       ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runConductorLoop(project, config);
@@ -90,6 +103,7 @@ program
     const config: ConductorConfig = {
       ...DEFAULT_CONDUCTOR_CONFIG,
       maxExpertIterations: parseInt(opts.expertMax, 10),
+      provider: resolveProvider(),
       ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
     await runConductorIteration(project, config);
@@ -198,7 +212,7 @@ program
       const current = await getCurrentVersion(historyDir);
       const version = versionStr ? parseInt(versionStr, 10) : current;
 
-      await restoreVersion(historyDir, version, path.join(process.cwd(), "CLAUDE.md"));
+      await restoreVersion(historyDir, version, path.join(process.cwd(), conductorFile(resolveProvider())));
       console.log(`✅ Conductor rolled back to ${padVersion(version)}`);
     } else {
       // Treat target as project name
