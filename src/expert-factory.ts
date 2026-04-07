@@ -47,6 +47,24 @@ export async function createExpert(
     }
   }
 
+  // Fallback: search global expert library when local has no match
+  if (!persona) {
+    try {
+      const { findGlobalExperts } = await import("./global-expert-library.js");
+      const globalCandidates = await findGlobalExperts(selection.questionType, selection.question, 3);
+      if (globalCandidates.length > 0 && globalCandidates[0].score > REUSE_THRESHOLD) {
+        const top = globalCandidates[0];
+        const basePath = path.join(SEA_ROOT, "projects", top.projectName, top.personaPath);
+        const basePersona = await safeRead(basePath);
+        if (basePersona) {
+          console.log(`   ♻ Adapting global expert from ${top.projectName} (${top.expertType}, score: ${top.score.toFixed(1)})`);
+          persona = await adaptExistingPersona(basePersona, selection, projectDir, maxExpertIterations, iterStr, provider);
+          adaptedFromHash = top.personaHash;
+        }
+      }
+    } catch { /* non-fatal — global library may not exist yet */ }
+  }
+
   if (!persona) {
     persona = await createFreshPersona(selection, projectDir, maxExpertIterations, iterStr, provider);
   }
@@ -305,7 +323,22 @@ async function selectRelevantFindings(
     return true;
   });
 
-  return deduped.slice(0, maxFindings);
+  const result = deduped.slice(0, maxFindings);
+
+  // When local findings are sparse, augment with cross-project global wiki seeds
+  if (result.length < maxFindings) {
+    try {
+      const { seedFromGlobalWiki } = await import("./global-wiki.js");
+      const keywords = extractDomainKeywords(selection.question).slice(0, 5);
+      const seeds = await seedFromGlobalWiki(projectDir, "", keywords);
+      const seedSlots = maxFindings - result.length;
+      const usedIds = new Set(result.map((f) => f.id));
+      const uniqueSeeds = seeds.filter((s) => !usedIds.has(s.id));
+      result.push(...uniqueSeeds.slice(0, seedSlots));
+    } catch { /* non-fatal — global wiki may not exist */ }
+  }
+
+  return result;
 }
 
 /**

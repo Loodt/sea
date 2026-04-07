@@ -4,6 +4,7 @@ import { runAndTrace } from "./runner.js";
 import { appendSpan } from "./metrics.js";
 import { readSummary, readFindings, readQuestions } from "./knowledge.js";
 import type { ExpertConfig, ExpertHandoff, Finding, Question } from "./types.js";
+import { QUESTION_TYPE_SEARCH_BUDGET } from "./types.js";
 
 /**
  * Extract a section from a persona by heading name.
@@ -203,6 +204,7 @@ async function assembleExpertPrompt(
 ): Promise<string> {
   const isFirstIter = innerIter === 1;
   const isFinalIter = innerIter === config.maxIterations;
+  const searchBudget = QUESTION_TYPE_SEARCH_BUDGET[config.questionType] ?? 5;
 
   // First iteration: compact context with file reference to full persona.
   // Full persona is at {expertDir}/persona.md — the subprocess reads it directly.
@@ -232,7 +234,13 @@ ${config.question}
 Question ID: ${config.questionId}
 
 ## ITERATION 1 of ${config.maxIterations}
-This is your FIRST iteration. Start with Stage 1 of your workflow (fast-kill check).
+This is your FIRST iteration.
+
+## PACING CONSTRAINT
+You may make at most ${searchBudget} web searches in this iteration. After completing your searches, synthesize findings from what you discovered. You have ${config.maxIterations} iterations total — distribute your research across all iterations rather than attempting comprehensive coverage in one pass.
+
+## SCOPE CONSTRAINT
+Execute ONLY Stage 1 of your workflow in this iteration. Do NOT proceed to Stage 2 or beyond. End with your Stage 1 findings and a NEXT ITERATION PLAN describing what Stage 2 should cover.
 
 ## STAGE 1 (from your persona)
 ${stage1 || "(Read Stage 1 from your persona file)"}
@@ -308,6 +316,12 @@ Question ID: ${config.questionId}
 
 ## ITERATION ${innerIter} of ${config.maxIterations}
 ${isFinalIter ? "This is your FINAL iteration. You MUST produce a HANDOFF block regardless of convergence." : "Continue from where the prior iteration left off."}
+
+## PACING CONSTRAINT
+You may make at most ${isFinalIter ? searchBudget + 2 : searchBudget} web searches in this iteration.${isFinalIter ? " Use them to fill critical gaps, then synthesize all findings gathered across prior iterations." : " Synthesize findings from what you discover."}
+
+## SCOPE CONSTRAINT
+${isFinalIter ? "Synthesize all findings gathered across prior iterations. You may do a small number of additional searches to fill critical gaps, then produce your HANDOFF block." : "Continue to the next stage of your workflow from where the prior iteration stopped. Do not attempt to cover all remaining stages in one iteration."}
 
 ${stateSection}
 

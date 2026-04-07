@@ -200,6 +200,17 @@ export async function runConductorIteration(
     } catch (err) {
       console.log(`   ⚠ Global wiki update failed: ${(err as Error).message}`);
     }
+
+    // Update global expert library (non-fatal — promotes high-scoring experts cross-project)
+    try {
+      const { promoteExpertsToGlobal } = await import("./global-expert-library.js");
+      const expertResult = await promoteExpertsToGlobal(projectDir, projectName);
+      if (expertResult.promoted > 0) {
+        console.log(`   ✓ Global experts: ${expertResult.promoted} promoted`);
+      }
+    } catch (err) {
+      console.log(`   ⚠ Global expert library update failed: ${(err as Error).message}`);
+    }
   }
 
   // Compute dispatch-level delta (captures findings written by expert + integration)

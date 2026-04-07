@@ -31,6 +31,12 @@ Selection MUST reject near-duplicate open questions before creating new ones.
 - **crashed** — infrastructure failure. NOT exhausted, re-dispatch eligible. Integrate partial findings BEFORE persona reset on re-dispatch
 - **empirical-gate** — question requires physical measurement/bench test that literature cannot resolve. Do not re-dispatch; flag for human action
 
+## Expert Pacing
+Each inner iteration is search-budgeted by question type (defined in `types.ts` `QUESTION_TYPE_SEARCH_BUDGET`). Injected at prompt assembly time. Final iterations get budget + 2 for synthesis gap-filling. Budget does NOT limit file reads, knowledge store writes, or other non-search tool use.
+
+## Global Expert Library
+High-scoring expert personas (score > 2.0, dispatches >= 2) are promoted to `global-expert-library.jsonl` after each dispatch. New projects search the global library as a fallback when no local expert match exists. Adapted personas track cross-project lineage via `adaptedFrom`. CLI: `sea global-experts [project]`.
+
 ## Expert Library
 Personas stored by hash in expert-library/library.jsonl. Utility = avgIG x log(dispatches + 1). Factory checks library for matches by questionType + domain overlap (normalized to [0,1]); adapts high-scoring persona (>2.0) instead of creating fresh. Adapted entries track lineage via `adaptedFrom` field.
 

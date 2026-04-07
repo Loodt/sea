@@ -304,6 +304,51 @@ program
     console.log("See global-wiki/");
   });
 
+// ── sea global-experts [project] ──
+program
+  .command("global-experts [project]")
+  .description("Promote high-scoring experts from project(s) to the cross-project global expert library")
+  .action(async (projectName?: string) => {
+    const { promoteExpertsToGlobal } = await import("./global-expert-library.js");
+    const projectsDir = path.join(process.cwd(), "projects");
+
+    if (projectName) {
+      const projectDir = path.join(projectsDir, projectName);
+      const result = await promoteExpertsToGlobal(projectDir, projectName);
+      console.log(
+        `Global expert library updated from ${projectName}: ${result.promoted} promoted, ${result.skipped} skipped`
+      );
+    } else {
+      const { readdir } = await import("node:fs/promises");
+      let projects: string[];
+      try {
+        projects = await readdir(projectsDir);
+      } catch {
+        console.log("No projects directory found.");
+        return;
+      }
+      let totalPromoted = 0;
+      for (const p of projects) {
+        try {
+          const result = await promoteExpertsToGlobal(
+            path.join(projectsDir, p),
+            p
+          );
+          if (result.promoted > 0) {
+            console.log(`  ${p}: ${result.promoted} promoted, ${result.skipped} skipped`);
+          }
+          totalPromoted += result.promoted;
+        } catch {
+          // Skip projects without expert library
+        }
+      }
+      console.log(
+        `Global expert library: ${totalPromoted} promoted across ${projects.length} projects`
+      );
+    }
+    console.log("See global-expert-library.jsonl");
+  });
+
 // ── sea audit <project> ──
 program
   .command("audit <project>")

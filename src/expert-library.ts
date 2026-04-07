@@ -140,7 +140,7 @@ export async function upsertLibraryEntry(
 
 // ── Helpers ──
 
-function extractKeywords(text: string): string[] {
+export function extractKeywords(text: string): string[] {
   const stops = new Set([
     "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
     "was", "has", "how", "its", "may", "what", "when", "where", "which",

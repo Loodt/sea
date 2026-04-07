@@ -282,6 +282,15 @@ export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
   synthesis: 5,
 };
 
+/** Max web searches per inner iteration, by question type. */
+export const QUESTION_TYPE_SEARCH_BUDGET: Record<QuestionType, number> = {
+  landscape: 7,
+  "data-hunt": 5,
+  "kill-check": 5,
+  mechanism: 6,
+  synthesis: 3,
+};
+
 export interface ConductorState extends ProjectState {
   mode: "conductor";
   conductorIteration: number;
@@ -375,6 +384,26 @@ export interface LibraryEntry {
   score: number;
   status: "active" | "retired";
   adaptedFrom?: string;
+}
+
+// ── Global Expert Library ──
+
+export const EXPERT_GLOBAL_PROMOTE_THRESHOLD = 2.0;
+export const EXPERT_GLOBAL_MIN_DISPATCHES = 2;
+
+export interface GlobalExpertEntry {
+  globalPersonaId: string; // projectName--personaHash
+  personaHash: string;
+  projectName: string;
+  questionType: QuestionType;
+  domain: string;
+  expertType: string;
+  avgIG: number;
+  dispatches: number;
+  score: number;
+  personaPath: string; // relative to project dir
+  promotedAt: string;
+  revokedAt: string | null;
 }
 
 // ── Utilities ──
