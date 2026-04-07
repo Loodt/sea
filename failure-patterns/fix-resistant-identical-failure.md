@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Fix-Resistant Identical Failure
 
 ## Description

@@ -5,6 +5,7 @@ import { CONTEXT_BUDGETS, DEFAULT_PIPELINE, conductorFile, conductorFileCandidat
 import { getIntegritySnippets } from "./integrity.js";
 import { readSummary, readFindings, readQuestions, informationGain } from "./knowledge.js";
 import { readScores } from "./metrics.js";
+import { isPatternRelevant } from "./pattern-filter.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -165,7 +166,9 @@ async function assemblePlan(
   );
   const evalBrief = lastEval ? truncate(lastEval, 1500) : "";
 
-  // Failure patterns relevant to this project
+  // Failure patterns — pipeline mode has no structured question type or domain,
+  // so all patterns are included. When domain-specific patterns exist, domain
+  // could be inferred from the project's findings or goal.
   const failurePatterns = await loadFailurePatterns();
 
   const integrity = getIntegritySnippets("plan");
@@ -463,7 +466,7 @@ async function assembleEvolve(
   );
   const trend = lastN(allScores, 5).map((s) => s.overall);
 
-  // Failure and success patterns
+  // Failure and success patterns — pipeline mode includes all (no question type context)
   const failurePatterns = await loadFailurePatterns();
   const successPatterns = await loadSuccessPatterns();
 
@@ -665,7 +668,7 @@ ${Object.keys(allScoreTrends).length > 0 ? JSON.stringify(allScoreTrends, null, 
 
 // ── Failure Patterns ──
 
-async function loadFailurePatterns(): Promise<string> {
+async function loadFailurePatterns(domain?: string, questionType?: string): Promise<string> {
   const dir = path.join(SEA_ROOT, "failure-patterns");
   try {
     const files = await readdir(dir);
@@ -675,6 +678,8 @@ async function loadFailurePatterns(): Promise<string> {
     const patterns: string[] = [];
     for (const file of mdFiles) {
       const content = await safeRead(path.join(dir, file));
+      if (!isPatternRelevant(content, domain, questionType)) continue;
+
       // Extract just the description and prevention — not the full file
       const desc = extractSection(content, "Description");
       const prevention = extractSection(content, "Prevention");

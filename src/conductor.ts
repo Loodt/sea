@@ -178,6 +178,17 @@ export async function runConductorIteration(
 
     // Aggregate source URLs into references/links.md
     await aggregateReferences(projectDir);
+
+    // Update wiki output (non-fatal — wiki is derived, not source of truth)
+    try {
+      const { updateWiki } = await import("./wiki.js");
+      const wikiResult = await updateWiki(projectDir);
+      if (wikiResult.written > 0 || wikiResult.archived > 0 || wikiResult.backfilled > 0) {
+        console.log(`   ✓ Wiki: ${wikiResult.written} written, ${wikiResult.skipped} unchanged, ${wikiResult.archived} archived${wikiResult.backfilled > 0 ? `, ${wikiResult.backfilled} backfilled` : ""}`);
+      }
+    } catch (err) {
+      console.log(`   ⚠ Wiki update failed: ${(err as Error).message}`);
+    }
   }
 
   // Compute dispatch-level delta (captures findings written by expert + integration)

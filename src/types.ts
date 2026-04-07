@@ -79,6 +79,31 @@ export type EpistemicTag = "SOURCE" | "DERIVED" | "ESTIMATED" | "ASSUMED" | "UNK
 export type FindingStatus = "provisional" | "verified" | "refuted" | "superseded";
 export type QuestionStatus = "open" | "resolved" | "deferred";
 
+export type EngineeringType =
+  | "MEASUREMENT"
+  | "STANDARD"
+  | "DERIVED"
+  | "DESIGN"
+  | "ASSUMPTION"
+  | "HYPOTHESIS";
+
+export const ENGINEERING_TYPE_PRIORITY: Record<EngineeringType, number> = {
+  MEASUREMENT: 1,
+  STANDARD: 1,
+  DERIVED: 2,
+  DESIGN: 3,
+  ASSUMPTION: 4,
+  HYPOTHESIS: 5,
+};
+
+export const QUESTION_TYPE_CONTEXT_FILTER: Record<string, EngineeringType[]> = {
+  mechanism: ["MEASUREMENT", "STANDARD", "DERIVED"],
+  "kill-check": ["MEASUREMENT", "STANDARD", "DERIVED", "ASSUMPTION"],
+  synthesis: ["DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
+  "data-hunt": ["MEASUREMENT", "STANDARD"],
+  landscape: ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
+};
+
 export interface Finding {
   id: string;
   claim: string;
@@ -90,6 +115,20 @@ export interface Finding {
   status: FindingStatus;
   verifiedAt: number | null;
   supersededBy: string | null;
+
+  // Engineering knowledge classification (optional, backward-compatible)
+  engineeringType?: EngineeringType;
+  quantitative?: {
+    value?: number;
+    unit?: string;
+    uncertainty?: string;
+    variableA?: string;
+    variableB?: string;
+    relationship?: "direct" | "inverse" | "nonlinear" | "threshold";
+    observedRange?: { a: [number, number]; b: [number, number] };
+  };
+  linkedFindings?: string[];
+  humanReviewRequired?: boolean;
 }
 
 export interface Question {
@@ -234,13 +273,13 @@ export interface QuestionSelection {
   questionType: QuestionType;
 }
 
-/** Max inner iterations per question type. Data-hunt capped at 3, synthesis at 2. */
+/** Max inner iterations per question type. Data-hunt capped at 3 (high exhaustion risk). */
 export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
   landscape: 5,
   "kill-check": 5,
   "data-hunt": 3,
   mechanism: 5,
-  synthesis: 2,
+  synthesis: 5,
 };
 
 export interface ConductorState extends ProjectState {

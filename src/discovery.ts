@@ -53,6 +53,7 @@ export async function discoverProject(
     "scratch",
     "experts",
     "expert-library",
+    "wiki",
   ];
 
   for (const dir of dirs) {

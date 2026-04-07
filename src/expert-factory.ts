@@ -3,6 +3,7 @@ import path from "node:path";
 import { runAndTrace } from "./runner.js";
 import { readSummary, readFindings, queryFindings } from "./knowledge.js";
 import { readLibrary, findMatchingExperts, hashPersona } from "./expert-library.js";
+import { isPatternRelevant } from "./pattern-filter.js";
 import type { ExpertConfig, QuestionSelection, Finding, Provider } from "./types.js";
 
 const SEA_ROOT = process.cwd();
@@ -192,8 +193,8 @@ async function assembleExpertCreationPrompt(
     ? relevantFindings.map((f) => `- ${f.id}: [${f.tag}] ${f.claim} (confidence: ${f.confidence}, status: ${f.status})`).join("\n")
     : "(No directly relevant findings yet)";
 
-  // Load failure and success patterns
-  const failurePatterns = await loadFailurePatterns();
+  // Load failure and success patterns (filtered by question type)
+  const failurePatterns = await loadFailurePatterns(undefined, selection.questionType);
   const successPatterns = await loadSuccessPatterns();
 
   return `${framework}
@@ -356,7 +357,7 @@ async function loadSuccessPatterns(): Promise<string> {
   }
 }
 
-async function loadFailurePatterns(): Promise<string> {
+async function loadFailurePatterns(domain?: string, questionType?: string): Promise<string> {
   const dir = path.join(SEA_ROOT, "failure-patterns");
   try {
     const files = await readdir(dir);
@@ -366,6 +367,8 @@ async function loadFailurePatterns(): Promise<string> {
     const patterns: string[] = [];
     for (const file of mdFiles) {
       const content = await safeRead(path.join(dir, file));
+      if (!isPatternRelevant(content, domain, questionType)) continue;
+
       const descMatch = content.match(/## Description\n+([\s\S]*?)(?=\n##|\n$)/);
       if (descMatch) {
         const desc = descMatch[1].trim().split("\n")[0];

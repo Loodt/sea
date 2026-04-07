@@ -1,8 +1,9 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { existsSync } from "node:fs";
 import { readSummary, readFindings, readQuestions, findingCounts } from "./knowledge.js";
-import type { ExpertHandoff, Question, Finding, Provider } from "./types.js";
-import { conductorFile, conductorFileCandidates } from "./types.js";
+import type { ExpertHandoff, Question, Finding, EngineeringType, Provider } from "./types.js";
+import { conductorFile, conductorFileCandidates, ENGINEERING_TYPE_PRIORITY, QUESTION_TYPE_CONTEXT_FILTER } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -30,6 +31,89 @@ function truncate(text: string, maxChars: number): string {
   return text.slice(0, maxChars) + "\n...(truncated)";
 }
 
+// ── Wiki Context ──
+
+const TYPE_FOLDER_MAP: Record<EngineeringType, string> = {
+  MEASUREMENT: "facts",
+  STANDARD: "facts",
+  DERIVED: "relationships",
+  DESIGN: "decisions",
+  ASSUMPTION: "assumptions",
+  HYPOTHESIS: "assumptions",
+};
+
+/**
+ * Select wiki nodes relevant to the given question type and domain,
+ * respecting a character budget. Drops lower-priority types first.
+ */
+export async function selectWikiContext(
+  projectDir: string,
+  questionType: string,
+  domain: string,
+  charBudget: number = 3000
+): Promise<string> {
+  const wikiDir = path.join(projectDir, "wiki");
+  if (!existsSync(wikiDir)) return "";
+
+  // Read manifest to know what nodes exist
+  let manifest: { entries: Array<{ findingId: string; wikiPath: string }> };
+  try {
+    const content = await readFile(path.join(wikiDir, "manifest.json"), "utf-8");
+    manifest = JSON.parse(content);
+  } catch {
+    return "";
+  }
+  if (!manifest.entries || manifest.entries.length === 0) return "";
+
+  const allowedTypes = QUESTION_TYPE_CONTEXT_FILTER[questionType] ??
+    (["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION"] as EngineeringType[]);
+
+  // Read findings to get their engineering types and domains
+  const findings = await readFindings(projectDir);
+  const findingMap = new Map(findings.map((f) => [f.id, f]));
+
+  const candidates: Array<{ priority: number; content: string }> = [];
+
+  for (const entry of manifest.entries) {
+    const finding = findingMap.get(entry.findingId);
+    if (!finding) continue;
+
+    const engType = finding.engineeringType ?? "ASSUMPTION";
+    if (!allowedTypes.includes(engType as EngineeringType)) continue;
+
+    // Domain relevance check — match if domain overlaps or is general
+    if (domain && finding.domain && !finding.domain.toLowerCase().includes(domain.toLowerCase()) &&
+        !domain.toLowerCase().includes(finding.domain.toLowerCase())) continue;
+
+    try {
+      const nodePath = path.join(projectDir, entry.wikiPath.replace(/\//g, path.sep));
+      const content = await readFile(nodePath, "utf-8");
+      candidates.push({
+        priority: ENGINEERING_TYPE_PRIORITY[engType as EngineeringType] ?? 5,
+        content,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  if (candidates.length === 0) return "";
+
+  // Sort by priority (lower = higher priority = include first)
+  candidates.sort((a, b) => a.priority - b.priority);
+
+  const selected: string[] = [];
+  let used = 0;
+  for (const c of candidates) {
+    if (used + c.content.length > charBudget) break;
+    selected.push(c.content);
+    used += c.content.length;
+  }
+
+  if (selected.length === 0) return "";
+  return `## Relevant Engineering Knowledge (${selected.length} nodes)\n\n${selected.join("\n---\n\n")}`;
+}
+
 // ── Question Selection ──
 
 /**
@@ -42,6 +126,9 @@ export async function assembleQuestionSelectionPrompt(
 ): Promise<string> {
   const goal = await safeRead(path.join(projectDir, "goal.md"));
   const summary = await readSummary(projectDir);
+  // "landscape" type = include all engineering types. The conductor needs a broad view
+  // of all knowledge to decide which question to select next. Domain is empty = all domains.
+  const wikiContext = await selectWikiContext(projectDir, "landscape", "", 3000);
   const questions = await readQuestions(projectDir);
   const findings = await readFindings(projectDir);
 
@@ -85,6 +172,7 @@ ${truncate(goal, 2000)}
 
 ## Current Knowledge Summary
 ${summary || "(No findings yet — first conductor iteration)"}
+${wikiContext ? `\n${wikiContext}` : ""}
 
 ## Project Statistics
 ${statsText}

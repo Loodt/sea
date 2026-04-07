@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Failure Pattern: Derived Claim Blindspot
 
 ## Symptom

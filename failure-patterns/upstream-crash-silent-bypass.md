@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Upstream Crash Silent Bypass
 
 When an upstream pipeline step crashes (exit code 1, 0 bytes output) and the downstream step proceeds as if it succeeded. The downstream step produces a complete, high-quality deliverable — but its sourcing chain is suspect because the upstream step's quality controls (source verification, finding persistence, reference logging) were never executed.

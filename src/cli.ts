@@ -241,4 +241,17 @@ program
     }
   });
 
+program
+  .command("wiki <project>")
+  .description("Generate or update engineering wiki from project findings")
+  .action(async (projectName: string) => {
+    const projectDir = path.join(process.cwd(), "projects", projectName);
+    const { updateWiki } = await import("./wiki.js");
+    const result = await updateWiki(projectDir);
+    console.log(
+      `Wiki updated: ${result.written} written, ${result.skipped} unchanged, ${result.archived} archived${result.backfilled > 0 ? `, ${result.backfilled} backfilled` : ""}`
+    );
+    console.log(`See projects/${projectName}/wiki/index.md`);
+  });
+
 program.parse();

@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Pipeline Step Deferral
 
 When a multi-step pipeline has a dedicated "cleanup" or "summarize" step at the end, agents consistently defer write-side-effects (knowledge store updates, artifact logging) to that final step. If the final step doesn't execute — due to context exhaustion, early termination, pipeline truncation, or simply not being called — all deferred writes are lost.

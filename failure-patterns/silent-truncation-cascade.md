@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Silent Truncation Cascade
 
 A pipeline step runs out of context mid-task, produces partial output, and exits 0 (success). Downstream steps consume the partial output as if complete, compounding the error at scale.

@@ -83,6 +83,17 @@ export async function runIteration(
     }
   }
 
+  // Update wiki output (non-fatal)
+  try {
+    const { updateWiki } = await import("./wiki.js");
+    const wikiResult = await updateWiki(projectDir);
+    if (wikiResult.written > 0 || wikiResult.archived > 0 || wikiResult.backfilled > 0) {
+      console.log(`   ✓ Wiki: ${wikiResult.written} written, ${wikiResult.skipped} unchanged, ${wikiResult.archived} archived${wikiResult.backfilled > 0 ? `, ${wikiResult.backfilled} backfilled` : ""}`);
+    }
+  } catch (err) {
+    console.log(`   ⚠ Wiki update failed: ${(err as Error).message}`);
+  }
+
   // Advance state
   const hasEvolve = enabledSteps.some((s) => s.type === "evolve");
   const newState = await advanceIteration(projectDir, hasEvolve);

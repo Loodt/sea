@@ -1,3 +1,8 @@
+---
+domains: [general]
+question_types: [all]
+---
+
 # Heuristic Layer Ceiling
 
 When a behavioral heuristic in the persona fails 3+ consecutive times despite correct root cause diagnosis, the fix is being applied at the wrong layer. The persona (behavioral guidance) cannot fix problems in the pipeline architecture (execution order, context routing, step isolation).
