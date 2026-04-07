@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Score, Span } from "./types.js";
+import type { Score, Span, ConductorMetric, Finding, Question } from "./types.js";
 import { atomicAppendJsonl } from "./file-lock.js";
 
 /**
@@ -216,4 +216,145 @@ export async function readSpans(projectDir: string): Promise<Span[]> {
   } catch {
     return [];
   }
+}
+
+// ── Conductor Metrics ──
+
+export async function readConductorMetrics(projectDir: string): Promise<ConductorMetric[]> {
+  const filePath = path.join(projectDir, "metrics", "conductor-metrics.jsonl");
+  try {
+    const content = await readFile(filePath, "utf-8");
+    return content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as ConductorMetric);
+  } catch {
+    return [];
+  }
+}
+
+// ── Convergence Detection ──
+
+export interface DispatchEfficiency {
+  avgFindings: number;
+  trend: "improving" | "stable" | "degrading";
+  recentAvg: number;
+  priorAvg: number;
+}
+
+/**
+ * Compute dispatch efficiency from conductor metrics.
+ * Compares the last `window` dispatches against the prior `window` to detect trend.
+ */
+export function computeDispatchEfficiency(
+  metrics: ConductorMetric[],
+  window: number = 5
+): DispatchEfficiency {
+  if (metrics.length === 0) {
+    return { avgFindings: 0, trend: "stable", recentAvg: 0, priorAvg: 0 };
+  }
+
+  const totalFindings = metrics.reduce((sum, m) => sum + m.findingsAdded, 0);
+  const avgFindings = totalFindings / metrics.length;
+
+  if (metrics.length < window + 1) {
+    return { avgFindings, trend: "stable", recentAvg: avgFindings, priorAvg: avgFindings };
+  }
+
+  const recent = metrics.slice(-window);
+  const prior = metrics.slice(0, -window);
+
+  const recentAvg = recent.reduce((s, m) => s + m.findingsAdded, 0) / recent.length;
+  const priorAvg = prior.reduce((s, m) => s + m.findingsAdded, 0) / prior.length;
+
+  // >30% improvement or degradation counts as a trend change
+  const ratio = priorAvg > 0 ? (recentAvg - priorAvg) / priorAvg : 0;
+  const trend = ratio > 0.3 ? "improving" : ratio < -0.3 ? "degrading" : "stable";
+
+  return { avgFindings, trend, recentAvg, priorAvg };
+}
+
+export interface ConvergenceAssessment {
+  isConverging: boolean;
+  signals: string[];
+  recommendation: "continue" | "review" | "stop";
+}
+
+/**
+ * Detect convergence signals from findings, questions, and conductor metrics.
+ * Returns advisory assessment — never auto-stops the conductor.
+ *
+ * Signals (need 3+ for convergence):
+ * 1. Knowledge saturation: last 3 dispatches averaged < 1 new finding
+ * 2. Question frontier closed: no open questions remaining
+ * 3. Diminishing returns: dispatch efficiency trend is "degrading"
+ * 4. Domain saturation: last 5 findings all in already-covered domains
+ * 5. High exhaustion rate: >50% of last 5 dispatches ended in exhaustion
+ */
+export function detectConvergenceSignals(
+  findings: Finding[],
+  questions: Question[],
+  metrics: ConductorMetric[]
+): ConvergenceAssessment {
+  const signals: string[] = [];
+
+  // Need at least 3 dispatches to assess anything
+  if (metrics.length < 3) {
+    return { isConverging: false, signals: [], recommendation: "continue" };
+  }
+
+  // Signal 1: Knowledge saturation — last 3 dispatches averaged < 1 finding
+  const last3 = metrics.slice(-3);
+  const avgLast3 = last3.reduce((s, m) => s + m.findingsAdded, 0) / last3.length;
+  if (avgLast3 < 1) {
+    signals.push(`Knowledge saturation: last 3 dispatches averaged ${avgLast3.toFixed(1)} findings`);
+  }
+
+  // Signal 2: Question frontier closed — no open questions
+  const openQuestions = questions.filter((q) => q.status === "open");
+  if (openQuestions.length === 0) {
+    signals.push("Question frontier closed: no open questions remaining");
+  }
+
+  // Signal 3: Diminishing returns — dispatch efficiency degrading
+  const efficiency = computeDispatchEfficiency(metrics);
+  if (efficiency.trend === "degrading") {
+    signals.push(
+      `Diminishing returns: recent avg ${efficiency.recentAvg.toFixed(1)} findings/dispatch vs prior ${efficiency.priorAvg.toFixed(1)}`
+    );
+  }
+
+  // Signal 4: Domain saturation — last 5 findings all in previously-covered domains
+  if (findings.length >= 10) {
+    const last5Findings = findings.slice(-5);
+    const olderDomains = new Set(findings.slice(0, -5).map((f) => f.domain));
+    const allInOldDomains = last5Findings.every((f) => olderDomains.has(f.domain));
+    if (allInOldDomains) {
+      signals.push("Domain saturation: last 5 findings all in previously-covered domains");
+    }
+  }
+
+  // Signal 5: High exhaustion rate — >50% of last 5 dispatches exhausted or crashed
+  if (metrics.length >= 5) {
+    const last5 = metrics.slice(-5);
+    const exhaustedOrCrashed = last5.filter(
+      (m) => m.expertStatus === "exhausted" || m.expertStatus === "crashed"
+    ).length;
+    if (exhaustedOrCrashed > last5.length / 2) {
+      signals.push(
+        `High exhaustion rate: ${exhaustedOrCrashed}/${last5.length} recent dispatches exhausted/crashed`
+      );
+    }
+  }
+
+  const signalCount = signals.length;
+  const recommendation =
+    signalCount >= 3 ? "stop" : signalCount >= 2 ? "review" : "continue";
+
+  return {
+    isConverging: signalCount >= 2,
+    signals,
+    recommendation,
+  };
 }

@@ -341,6 +341,49 @@ export async function runConductorLoop(
       console.log("   ✓ Conductor updated");
     }
 
+    // Convergence check (advisory — never auto-stops)
+    try {
+      const { readConductorMetrics, detectConvergenceSignals } = await import("./metrics.js");
+      const { readFindings: readF, readQuestions: readQ } = await import("./knowledge.js");
+      const projDir = path.join(SEA_ROOT, "projects", projectName);
+      const [cMetrics, cFindings, cQuestions] = await Promise.all([
+        readConductorMetrics(projDir),
+        readF(projDir),
+        readQ(projDir),
+      ]);
+      const convergence = detectConvergenceSignals(cFindings, cQuestions, cMetrics);
+      if (convergence.isConverging) {
+        console.log(`\n⚡ Convergence signals (${convergence.recommendation.toUpperCase()}):`);
+        for (const signal of convergence.signals) {
+          console.log(`   - ${signal}`);
+        }
+        if (convergence.recommendation === "stop") {
+          // Write convergence report
+          const reportDir = path.join(projDir, "output");
+          await mkdir(reportDir, { recursive: true });
+          const report = [
+            "# Convergence Report",
+            "",
+            `*Generated: ${new Date().toISOString()}*`,
+            `*Conductor iteration: ${state.conductorIteration}*`,
+            "",
+            "## Signals",
+            "",
+            ...convergence.signals.map((s) => `- ${s}`),
+            "",
+            `## Recommendation: ${convergence.recommendation.toUpperCase()}`,
+            "",
+            "The knowledge frontier appears exhausted. Review wiki/index.md and output/ before continuing.",
+            "",
+          ].join("\n");
+          await writeFile(path.join(reportDir, "convergence-report.md"), report, "utf-8");
+          console.log(`   → Report written to output/convergence-report.md`);
+        }
+      }
+    } catch (err) {
+      // Convergence check is advisory — never block the loop
+    }
+
     if (!stopping && totalIterations < config.maxConductorIterations) {
       console.log(`\n⏱  Cooling down ${config.cooldownMs / 1000}s...`);
       await sleep(config.cooldownMs);

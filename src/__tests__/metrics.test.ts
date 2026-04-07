@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseScoresFromText, isRegressing } from "../metrics.js";
-import type { Score } from "../types.js";
+import { parseScoresFromText, isRegressing, computeDispatchEfficiency, detectConvergenceSignals } from "../metrics.js";
+import type { Score, ConductorMetric, Finding, Question } from "../types.js";
 
 // ── parseScoresFromText ──
 
@@ -192,5 +192,266 @@ describe("isRegressing", () => {
     const scores = [10, 5].map((v, i) => makeScore(v, i + 1));
     // Drop = (10-5)/10 = 0.5 > 0.15
     expect(isRegressing(scores, 1)).toBe(true);
+  });
+});
+
+// ── Helpers for convergence tests ──
+
+function makeMetric(overrides: Partial<ConductorMetric> = {}): ConductorMetric {
+  return {
+    conductorIteration: 1,
+    questionId: "Q001",
+    expertStatus: "answered",
+    findingsAdded: 5,
+    questionsResolved: 1,
+    newQuestionsCreated: 0,
+    innerIterationsRun: 2,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeFinding(overrides: Partial<Finding> = {}): Finding {
+  return {
+    id: "F001",
+    claim: "Test",
+    tag: "SOURCE",
+    source: "https://example.com",
+    confidence: 0.9,
+    domain: "test",
+    iteration: 1,
+    status: "provisional",
+    verifiedAt: null,
+    supersededBy: null,
+    ...overrides,
+  };
+}
+
+function makeQuestion(overrides: Partial<Question> = {}): Question {
+  return {
+    id: "Q001",
+    question: "Test?",
+    priority: "high",
+    context: "",
+    domain: "test",
+    iteration: 1,
+    status: "open",
+    resolvedAt: null,
+    resolvedBy: null,
+    ...overrides,
+  };
+}
+
+// ── computeDispatchEfficiency ──
+
+describe("computeDispatchEfficiency", () => {
+  it("returns zero for empty metrics", () => {
+    const result = computeDispatchEfficiency([]);
+    expect(result.avgFindings).toBe(0);
+    expect(result.trend).toBe("stable");
+  });
+
+  it("computes correct average", () => {
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 20 }),
+    ];
+    const result = computeDispatchEfficiency(metrics);
+    expect(result.avgFindings).toBe(15);
+  });
+
+  it("returns stable when not enough data for trend", () => {
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 5 }),
+    ];
+    const result = computeDispatchEfficiency(metrics, 5);
+    expect(result.trend).toBe("stable");
+  });
+
+  it("detects degrading trend", () => {
+    // Prior: 10, 10, 10 (avg 10). Recent (window=3): 2, 2, 2 (avg 2). Drop = -80%
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+    ];
+    const result = computeDispatchEfficiency(metrics, 3);
+    expect(result.trend).toBe("degrading");
+    expect(result.recentAvg).toBe(2);
+    expect(result.priorAvg).toBe(10);
+  });
+
+  it("detects improving trend", () => {
+    // Prior: 2, 2, 2 (avg 2). Recent: 10, 10, 10 (avg 10). Increase = +400%
+    const metrics = [
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+    ];
+    const result = computeDispatchEfficiency(metrics, 3);
+    expect(result.trend).toBe("improving");
+  });
+
+  it("returns stable for small changes", () => {
+    // Prior avg 10, Recent avg 9. Drop = -10%, below 30% threshold
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 9 }),
+      makeMetric({ findingsAdded: 9 }),
+      makeMetric({ findingsAdded: 9 }),
+    ];
+    const result = computeDispatchEfficiency(metrics, 3);
+    expect(result.trend).toBe("stable");
+  });
+});
+
+// ── detectConvergenceSignals ──
+
+describe("detectConvergenceSignals", () => {
+  it("returns no convergence for fresh project (< 3 dispatches)", () => {
+    const metrics = [makeMetric(), makeMetric()];
+    const result = detectConvergenceSignals([], [], metrics);
+    expect(result.isConverging).toBe(false);
+    expect(result.signals).toHaveLength(0);
+    expect(result.recommendation).toBe("continue");
+  });
+
+  it("detects knowledge saturation (< 1 finding per dispatch)", () => {
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+    ];
+    const questions = [makeQuestion({ status: "open" })];
+    const result = detectConvergenceSignals([], questions, metrics);
+    expect(result.signals.some((s) => s.includes("Knowledge saturation"))).toBe(true);
+  });
+
+  it("detects closed question frontier", () => {
+    const metrics = [makeMetric(), makeMetric(), makeMetric()];
+    const questions = [
+      makeQuestion({ status: "resolved" }),
+      makeQuestion({ status: "resolved" }),
+    ];
+    const result = detectConvergenceSignals([], questions, metrics);
+    expect(result.signals.some((s) => s.includes("Question frontier closed"))).toBe(true);
+  });
+
+  it("detects diminishing returns", () => {
+    // Prior: high findings. Recent window: low findings (>30% drop)
+    const metrics = [
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+      makeMetric({ findingsAdded: 2 }),
+    ];
+    const result = detectConvergenceSignals([], [makeQuestion({ status: "open" })], metrics);
+    expect(result.signals.some((s) => s.includes("Diminishing returns"))).toBe(true);
+  });
+
+  it("detects domain saturation", () => {
+    // 10+ findings, last 5 all in domains that appeared before
+    const findings = [
+      ...Array.from({ length: 8 }, (_, i) => makeFinding({ id: `F${i}`, domain: "water" })),
+      makeFinding({ id: "F8", domain: "water" }),
+      makeFinding({ id: "F9", domain: "water" }),
+      makeFinding({ id: "F10", domain: "water" }),
+      makeFinding({ id: "F11", domain: "water" }),
+      makeFinding({ id: "F12", domain: "water" }),
+    ];
+    const metrics = [makeMetric(), makeMetric(), makeMetric()];
+    const result = detectConvergenceSignals(findings, [makeQuestion({ status: "open" })], metrics);
+    expect(result.signals.some((s) => s.includes("Domain saturation"))).toBe(true);
+  });
+
+  it("does NOT detect domain saturation when new domains appear", () => {
+    const findings = [
+      ...Array.from({ length: 8 }, (_, i) => makeFinding({ id: `F${i}`, domain: "water" })),
+      makeFinding({ id: "F8", domain: "gold" }),
+      makeFinding({ id: "F9", domain: "gold" }),
+      makeFinding({ id: "F10", domain: "thermal" }),
+      makeFinding({ id: "F11", domain: "water" }),
+      makeFinding({ id: "F12", domain: "new-domain" }),
+    ];
+    const metrics = [makeMetric(), makeMetric(), makeMetric()];
+    const result = detectConvergenceSignals(findings, [makeQuestion({ status: "open" })], metrics);
+    expect(result.signals.some((s) => s.includes("Domain saturation"))).toBe(false);
+  });
+
+  it("detects high exhaustion rate", () => {
+    const metrics = [
+      makeMetric({ expertStatus: "answered" }),
+      makeMetric({ expertStatus: "answered" }),
+      makeMetric({ expertStatus: "exhausted" }),
+      makeMetric({ expertStatus: "crashed" }),
+      makeMetric({ expertStatus: "exhausted" }),
+      makeMetric({ expertStatus: "exhausted" }),
+      makeMetric({ expertStatus: "crashed" }),
+    ];
+    const result = detectConvergenceSignals([], [makeQuestion({ status: "open" })], metrics);
+    expect(result.signals.some((s) => s.includes("High exhaustion rate"))).toBe(true);
+  });
+
+  it("recommends 'continue' with 0-1 signals", () => {
+    const metrics = [makeMetric({ findingsAdded: 10 }), makeMetric({ findingsAdded: 10 }), makeMetric({ findingsAdded: 10 })];
+    const questions = [makeQuestion({ status: "open" })];
+    const result = detectConvergenceSignals([], questions, metrics);
+    expect(result.recommendation).toBe("continue");
+  });
+
+  it("recommends 'review' with 2 signals", () => {
+    // Signal 1: knowledge saturation (0 findings last 3)
+    // Signal 2: closed frontier (no open questions)
+    const metrics = [
+      makeMetric({ findingsAdded: 10 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+    ];
+    const questions = [makeQuestion({ status: "resolved" })];
+    const result = detectConvergenceSignals([], questions, metrics);
+    expect(result.isConverging).toBe(true);
+    expect(result.recommendation).toBe("review");
+  });
+
+  it("recommends 'stop' with 3+ signals", () => {
+    // Signal 1: knowledge saturation (0 findings last 3)
+    // Signal 2: closed frontier (no open questions)
+    // Signal 3: diminishing returns (degrading trend)
+    const metrics = [
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 20 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+      makeMetric({ findingsAdded: 0 }),
+    ];
+    const questions = [makeQuestion({ status: "resolved" })];
+    const result = detectConvergenceSignals([], questions, metrics);
+    expect(result.isConverging).toBe(true);
+    expect(result.recommendation).toBe("stop");
+    expect(result.signals.length).toBeGreaterThanOrEqual(3);
   });
 });
