@@ -164,14 +164,13 @@ export function buildWikiNode(finding: Finding, wikiPathMap?: Map<string, string
         if (wikiPathMap) {
           const targetPath = wikiPathMap.get(id);
           if (targetPath) {
-            // Resolve cross-folder relative link from this node's folder
-            const thisFolder = classifyToFolder(engType);
-            const targetRel = targetPath.replace(/^wiki\//, "");
-            return `[${id}](../${targetRel})`;
+            // Obsidian wikilink: path relative to vault root (wiki/), without .md extension.
+            // [[facts/F031|F031]] renders in Obsidian graph AND degrades to readable text elsewhere.
+            const vaultRel = targetPath.replace(/^wiki\//, "").replace(/\.md$/, "");
+            return `[[${vaultRel}|${id}]]`;
           }
         }
-        // Fallback: same-folder link (may break for cross-type links)
-        return `[${id}](./${id}.md)`;
+        return `[[${id}]]`;
       })
       .join(", ");
     body.push("", `**Related findings**: ${links}`);
