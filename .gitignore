@@ -18,3 +18,9 @@ CLAUDE-history/
 
 # Claude Code local config
 .claude/settings.local.json
+.claude/notes.md
+.claude/plans/
+
+# Working documents (contain project-specific data)
+SEA-CURRENT-WORKINGS.md
+*.log
