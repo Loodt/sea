@@ -159,6 +159,9 @@ sea loop <project>                   # continuous pipeline loop
 sea run <project>                    # single pipeline iteration
 sea status [project]                 # show current state and scores
 sea history <project>                # evolution timeline with scores
+sea wiki <project>                   # generate/update engineering wiki from findings
+sea global-wiki [project]            # promote verified findings to cross-project wiki
+sea audit <project>                  # integrity audit: findings, wiki, questions, convergence
 sea rollback <project> [version]     # restore persona to earlier version
 sea rollback conductor [version]     # restore conductor to earlier version
 
@@ -193,23 +196,28 @@ sea/
     integrity.md               10 truthfulness axioms (evolvable)
   templates/
     expert-creation-framework.md   6-section persona anatomy
-  src/                         TypeScript CLI (~4,750 LOC)
+  src/                         TypeScript CLI (~5,500 LOC)
     cli.ts                     command dispatcher
     conductor.ts               outer loop orchestration
     expert-loop.ts             inner loop iteration
     expert-factory.ts          persona creation + library lookup
     expert-library.ts          persona scoring and reuse
     knowledge.ts               findings + questions JSONL store
+    wiki.ts                    engineering wiki generator (per-project)
+    global-wiki.ts             cross-project wiki promotion/seeding
+    audit.ts                   integrity auditor (findings, wiki, questions)
+    metrics.ts                 scores + spans + convergence detection
     context.ts                 prompt assembly for pipeline steps
     conductor-context.ts       prompt assembly for conductor steps
-    metrics.ts                 scores + spans
     runner.ts                  spawn LLM CLI sessions (claude/codex)
     loop.ts                    pipeline iteration flow
     safety.ts                  regression detection + rollback
     versioner.ts               snapshot/restore
     discovery.ts               interactive project setup
     integrity.ts               knowledge store validation
+    pattern-filter.ts          domain/question-type filtering for patterns
     types.ts                   all interfaces + defaults
+  global-wiki/                 cross-project verified findings (gitignored)
   projects/
     {name}/
       goal.md                  problem statement
@@ -219,6 +227,13 @@ sea/
         findings.jsonl         structured fact store with lifecycle
         questions.jsonl         open research frontier
         summary.md             compressed state (max 2KB)
+      wiki/                    engineering wiki (Obsidian-compatible)
+        index.md               domain-grouped finding index
+        facts/                 MEASUREMENT + STANDARD nodes
+        relationships/         DERIVED nodes
+        decisions/             DESIGN nodes
+        assumptions/           ASSUMPTION + HYPOTHESIS nodes
+        manifest.json          content-hash diffing state
       experts/                 per-dispatch expert personas
       expert-library/          persona reuse library (JSONL)
       metrics/
@@ -228,7 +243,7 @@ sea/
       lineage/changes.jsonl    evolution decisions
       traces/                  raw session output
       reflections/             scored evaluations
-      output/                  deliverables
+      output/                  deliverables + audit reports
 ```
 
 ### Knowledge layer
@@ -259,8 +274,9 @@ If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the
 - **Persona is strategy.** 80% of research quality comes from expert persona fit. The creation framework is the core investment.
 - **Exhaustion is knowledge.** When a question exhausts, the negative result becomes a structured finding documenting what was searched.
 - **Structure over rules.** Constraints are architectural (iteration caps, separate scoring model, staged workflow) not instructional.
-- **Kill fast, invest slow.** Question types have iteration caps (data-hunt: 3, synthesis: 2) to prevent wasted iterations.
+- **Kill fast, invest slow.** Question types have iteration caps (synthesis: 2, others: 5) to prevent wasted iterations.
 - **Learn bidirectionally.** Both failure patterns AND success patterns feed into expert creation.
+- **Knowledge compounds.** Verified findings promote to a global wiki that seeds new projects.
 
 ## Running SEA
 
@@ -312,6 +328,10 @@ Or read files directly:
 | Current knowledge | `knowledge/summary.md` |
 | All findings | `knowledge/findings.jsonl` |
 | Open questions | `knowledge/questions.jsonl` |
+| Browsable wiki | `wiki/index.md` (Obsidian-compatible) |
+| Cross-project findings | `global-wiki/manifest.jsonl` |
+| Integrity issues | `output/audit-report.md` |
+| Convergence status | `output/convergence-report.md` |
 | Last iteration output | `output/` |
 | How it was scored | `reflections/iter-NNN.md` |
 | Persona evolution | `lineage/changes.jsonl` |
@@ -326,9 +346,10 @@ Or read files directly:
 - [x] **Wave 5**: Meta-evolution (conductor self-improvement)
 - [x] **Wave 6**: Two-loop conductor/expert architecture
 - [x] **Wave 7**: Cross-model evaluate, structured spans, success patterns, novelty pressure, expert library
-- [ ] **Wave 8**: Skills repository (cross-project reusable patterns)
-- [ ] **Wave 9**: Bilevel code injection (runtime tool generation)
-- [ ] **Wave 10**: Context efficiency (trace summarization, skill filtering)
+- [x] **Wave 8**: Engineering wiki (per-project Obsidian-compatible), global wiki (cross-project promotion), audit command, convergence detection
+- [ ] **Wave 9**: Skills repository (cross-project reusable patterns)
+- [ ] **Wave 10**: Bilevel code injection (runtime tool generation)
+- [ ] **Wave 11**: Context efficiency (trace summarization, skill filtering)
 
 ## Research foundation
 
