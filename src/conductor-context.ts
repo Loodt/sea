@@ -31,6 +31,13 @@ function truncate(text: string, maxChars: number): string {
   return text.slice(0, maxChars) + "\n...(truncated)";
 }
 
+function extractHeadings(md: string): string {
+  return md
+    .split("\n")
+    .filter((l) => /^#{1,3}\s/.test(l))
+    .join("\n");
+}
+
 // ── Wiki Context ──
 
 const TYPE_FOLDER_MAP: Record<EngineeringType, string> = {
@@ -182,42 +189,14 @@ ${questionsText}
 ${exhaustedText}
 
 ## Selection Criteria
-Rank questions by:
-1. **Decision-relevance per research cost** — Which question, if answered, would most change what the project recommends? Prefer questions where a $500 lab test resolves more than 5 iterations of web search.
-2. **Information gain potential** — Which question, if answered, would unlock the most progress?
-3. **Priority** — HIGH > MEDIUM > LOW
-4. **Feasibility** — Can this be answered through web research? (see pre-screen below)
-5. **Domain data density** — Well-documented domains (regulatory, published chemistry) yield 5-10x more findings per iteration than data-sparse domains (facility-specific costs, proprietary data). Prefer data-dense domains when information gain is similar.
-6. **Staleness** — Older unanswered questions may indicate blocking gaps
-7. **Dependencies** — Does answering this question enable answering others?
-
-When a question requires primary research (lab work, site visit, paid data), do NOT dispatch an expert. Instead, flag it with a cost estimate and recommend it as a next action in the summary.
+Rank by: decision-relevance per research cost > information gain > priority > feasibility > data density > staleness > dependency-unlocking.
+Skip LOW feasibility questions (<30% chance answer exists in public sources — e.g., proprietary data, unpublished measurements). Flag them with a cost estimate instead of dispatching an expert.
+Prefer data-dense domains (regulatory, published science) when information gain is similar. See CLAUDE.md for question type taxonomy and iteration caps.
 
 ${openQuestions.length === 0 ? `## No Open Questions Available
-Generate 3-5 initial research questions from the project goal. These should be:
-- Specific enough for a single expert to investigate
-- Ordered from most fundamental to most detailed
-- Tagged with priority and domain
-
-Write them to knowledge/questions.jsonl in this format (one per line):
-{"id": "Q001", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
-
+Generate 3-5 initial research questions from the project goal (specific, ordered fundamental→detailed, tagged with priority and domain).
+Write to knowledge/questions.jsonl: {"id": "Q001", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
 Then select the first one.` : ""}
-
-## Question Type Taxonomy
-Classify each question before dispatch:
-- **landscape** — broad survey of a domain or option space. Standard budget (5 iterations).
-- **kill-check** — hypothesis falsification. High information density. Prioritize when >3 open pathways exist.
-- **data-hunt** — seeks specific numeric values/costs/thresholds. HIGH exhaustion risk. Capped at 3 iterations.
-- **mechanism** — investigates how/why something works. Standard budget.
-- **synthesis** — answerable by combining/re-analyzing existing knowledge store findings. Very high efficiency. Capped at 2 iterations.
-
-## Feasibility Pre-Screen
-Before selecting any question, estimate web-researchability (probability the answer exists in public sources):
-- **HIGH (>70%):** Published science, regulatory data, commercial product specs, established engineering parameters
-- **MEDIUM (30-70%):** Industry reports, conference papers, analogous system data requiring extrapolation
-- **LOW (<30%):** Facility-specific costs, proprietary data, unpublished measurements, specific site configurations
-If feasibility is LOW, classify as needs-primary-research and SKIP — select a higher-feasibility question instead. Do not burn expert iterations on questions that require lab work or site visits to answer.
 
 ## Instructions
 1. Analyse the open questions against the selection criteria
@@ -281,60 +260,23 @@ ${exhaustionContext}
 ## Instructions
 
 ### 1. Validate the handoff
-- Does the status ("${handoff.status}") match the evidence in the summary and findings?
-- Are the findings plausible? Do they have sources or derivation methods?
-- Do any findings contradict existing verified findings? If so, flag the contradiction.
+Verify status "${handoff.status}" matches evidence. Check findings for plausibility, sources, and contradictions with existing verified findings.
+${handoff.status === "crashed" ? `\n**Infrastructure crash** — do NOT create an exhaustion-as-finding. Question remains open for re-dispatch.\n` : ""}${handoff.status === "exhausted" ? `\n**Exhaustion-as-finding** — create synthetic DERIVED finding (F${String(counts.total + 1).padStart(3, "0")}, confidence 0.9) documenting the search space covered and data not found. This prevents re-investigation of the same gap.\n` : ""}
+### 2. Integrate findings
+Check existing findings.jsonl for duplicate claims BEFORE appending. New findings get sequential IDs after F${String(counts.total).padStart(3, "0")}. Confirm existing provisional → update to "verified". Contradictions → flag both.
 
-${handoff.status === "crashed" ? `### 1b. Infrastructure Crash
-This dispatch crashed (all inner iterations failed with non-zero exit codes). This is an infrastructure failure, NOT a content signal. Do NOT create an exhaustion-as-finding. The question remains open for re-dispatch once the infrastructure issue is resolved.
-` : ""}${handoff.status === "exhausted" ? `### 1b. Exhaustion-as-Finding
-This dispatch exhausted — the negative result IS knowledge. Create a synthetic finding:
-- ID: F${String(counts.total + 1).padStart(3, "0")}
-- tag: "DERIVED"
-- claim: Describe what search space was covered and what specific data was sought but not found
-- source: null
-- confidence: 0.9 (high confidence that the data doesn't exist in searched sources)
-- Add context about the implication for the research frontier
-- This prevents future dispatches from re-investigating the same gap
-` : ""}### 2. Integrate findings into the knowledge store
-The expert may have already written findings directly to knowledge/findings.jsonl during research.
-Check existing findings BEFORE appending — do NOT re-append findings whose claim text already exists in the file.
-For genuinely new findings only:
-- Assign a proper sequential ID (next after F${String(counts.total).padStart(3, "0")})
-- Append to knowledge/findings.jsonl
-- If a finding confirms an existing provisional finding, update the existing one to "verified"
-- If a finding contradicts an existing finding, flag both
+### 3. Update questions
+Apply question status changes from handoff. Set resolvedBy. New questions get sequential IDs after Q${String(questions.length).padStart(3, "0")}.
 
-### 3. Update question statuses
-For each question update in the handoff:
-- Update the question's status in knowledge/questions.jsonl
-- Set resolvedBy to the finding that resolved it
+### 4. Update summary
+Rewrite knowledge/summary.md (max 2KB). Read findings.jsonl to compute actual counts — do not use handoff counts.
 
-### 4. Add new questions
-For each new question discovered:
-- Assign a sequential ID (next after Q${String(questions.length).padStart(3, "0")})
-- Append to knowledge/questions.jsonl with status "open"
-
-### 5. Update summary
-- Rewrite knowledge/summary.md (max 2KB) to reflect the new state
-- IMPORTANT: Compute finding counts from actual knowledge/findings.jsonl, not from memory. Read the file and count statuses.
-
-### 6. Goal Achievement Check
-Read goal.md and check each success criterion:
+### 5. Goal check
 ${truncate(goal, 1000)}
+Add \`## Goal Progress\` to summary — for each criterion: MET (finding IDs), PARTIAL (what's missing), or NOT MET. If all MET: **PROJECT GOAL FULLY MET**.
 
-At the end of the summary, add a section:
-\`## Goal Progress\`
-For each success criterion, state: MET (with supporting finding IDs), PARTIAL (what's missing), or NOT MET.
-If ALL criteria are MET, add: **⚠ PROJECT GOAL FULLY MET — consider stopping.**
-
-### 7. Report
-After integration, output a brief integration report:
-- Findings added: N
-- Findings that confirmed existing: N
-- Contradictions detected: N
-- Questions resolved: N
-- New questions added: N
+### 6. Report
+Output: findings added, confirmed existing, contradictions, questions resolved, new questions added.
 `;
 }
 
@@ -376,12 +318,17 @@ export async function assembleConductorMetaPrompt(
 
   const conductorLines = conductor.split("\n").length;
 
+  const conductorHeadings = extractHeadings(conductor);
+
   return `You are the SEA meta-evolution agent. Improve the SEA Conductor itself.
 
 Your working directory is: ${SEA_ROOT}
 
 ## Current Conductor (${conductorLines} lines)
-${conductor}
+The conductor playbook (${filename}) is auto-loaded as project instructions — you already have its full content. Read it from disk when you need to modify it.
+
+### Structure
+${conductorHeadings}
 
 ## Integrity Principles
 ${truncate(integrity, 3000)}

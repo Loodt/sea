@@ -489,16 +489,13 @@ ${persona}
 ## Recent Evaluations
 ${reflections.join("\n\n---\n\n")}
 
-${recentLineage.length > 0 ? `## Recent Lineage\n${JSON.stringify(recentLineage, null, 2)}` : ""}
+${recentLineage.length > 0 ? `## Recent Lineage (for novelty assessment)\n${recentLineage.map((e: any) => `- iter ${e.iteration}: ${e.changeSummary} (${e.changeType})`).join("\n")}` : ""}
 
 ${trend.length > 0 ? `## Score Trend\n${trend.join(" → ")}` : ""}
 
 ${failurePatterns ? `## Known Failure Patterns\n${failurePatterns}` : ""}
 
 ${successPatterns ? `## Known Success Patterns\n${successPatterns}` : ""}
-
-## Recent Changes (for novelty assessment)
-${recentLineage.length > 0 ? recentLineage.map((e: any) => `- ${e.changeSummary}`).join("\n") : "No prior changes."}
 
 ## Instructions
 1. Check failure-patterns/ — is the issue you see already documented? If so, apply the known fix.
@@ -635,6 +632,9 @@ async function assembleMeta(conductor: string, filename: string = "CLAUDE.md"): 
   // Integrity principles for meta-review
   const integrity = await safeRead(path.join(SEA_ROOT, "eval", "integrity.md"));
 
+  const conductorHeadings = extractHeadings(conductor);
+  const conductorLines = conductor.split("\n").length;
+
   return `You are the meta-evolution agent. Improve the SEA Conductor itself.
 
 Your working directory is: ${SEA_ROOT}
@@ -642,8 +642,11 @@ Your working directory is: ${SEA_ROOT}
 ## Meta-Evolution Protocol
 ${metaProtocol}
 
-## Current Conductor
-${conductor}
+## Current Conductor (${conductorLines} lines)
+The conductor playbook (${filename}) is auto-loaded as project instructions — you already have its full content. Read it from disk when you need to modify it.
+
+### Structure
+${conductorHeadings}
 
 ## Integrity Principles
 ${truncate(integrity, 4000)}
@@ -668,7 +671,7 @@ ${Object.keys(allScoreTrends).length > 0 ? JSON.stringify(allScoreTrends, null, 
 
 // ── Failure Patterns ──
 
-async function loadFailurePatterns(domain?: string, questionType?: string): Promise<string> {
+async function loadFailurePatterns(domain?: string, questionType?: string, maxPatterns: number = 15): Promise<string> {
   const dir = path.join(SEA_ROOT, "failure-patterns");
   try {
     const files = await readdir(dir);
@@ -686,6 +689,7 @@ async function loadFailurePatterns(domain?: string, questionType?: string): Prom
       if (desc) {
         patterns.push(`**${file.replace(".md", "")}:** ${truncate(desc, 200)}\nPrevention: ${truncate(prevention, 300)}`);
       }
+      if (patterns.length >= maxPatterns) break;
     }
     return patterns.join("\n\n");
   } catch {
@@ -693,12 +697,22 @@ async function loadFailurePatterns(domain?: string, questionType?: string): Prom
   }
 }
 
-async function loadSuccessPatterns(): Promise<string> {
+async function loadSuccessPatterns(questionType?: string, maxPatterns: number = 10): Promise<string> {
   const dir = path.join(SEA_ROOT, "success-patterns");
   try {
     const files = await readdir(dir);
-    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    let mdFiles = files.filter((f) => f.endsWith(".md"));
     if (mdFiles.length === 0) return "";
+
+    // Filter by question type prefix when available
+    if (questionType) {
+      const typePrefix = questionType + "-";
+      const typed = mdFiles.filter((f) => f.startsWith(typePrefix));
+      if (typed.length > 0) mdFiles = typed;
+    }
+
+    // Take most recent (last in sorted order) up to cap
+    mdFiles = mdFiles.slice(-maxPatterns);
 
     const patterns: string[] = [];
     for (const file of mdFiles) {

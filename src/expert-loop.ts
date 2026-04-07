@@ -255,9 +255,6 @@ ${summary || "(No prior knowledge in the store)"}
 ## RELEVANT FINDINGS
 ${findingsContext}
 
-## CONVERGENCE CRITERIA
-${config.convergenceCriteria}
-
 ## INSTRUCTIONS
 1. Read your full persona from ${personaPath} — it contains your staged workflow, domain knowledge, and failure modes.
 2. Follow your persona's staged workflow. Begin with the fast-kill check.

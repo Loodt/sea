@@ -213,7 +213,7 @@ async function assembleExpertCreationPrompt(
 
   // Load failure and success patterns (filtered by question type)
   const failurePatterns = await loadFailurePatterns(undefined, selection.questionType);
-  const successPatterns = await loadSuccessPatterns();
+  const successPatterns = await loadSuccessPatterns(selection.questionType);
 
   return `${framework}
 
@@ -368,12 +368,22 @@ function truncate(text: string, maxChars: number): string {
   return text.slice(0, maxChars) + "\n...(truncated)";
 }
 
-async function loadSuccessPatterns(): Promise<string> {
+async function loadSuccessPatterns(questionType?: string, maxPatterns: number = 10): Promise<string> {
   const dir = path.join(SEA_ROOT, "success-patterns");
   try {
     const files = await readdir(dir);
-    const mdFiles = files.filter((f) => f.endsWith(".md"));
+    let mdFiles = files.filter((f) => f.endsWith(".md"));
     if (mdFiles.length === 0) return "";
+
+    // Filter by question type prefix when available
+    if (questionType) {
+      const typePrefix = questionType + "-";
+      const typed = mdFiles.filter((f) => f.startsWith(typePrefix));
+      if (typed.length > 0) mdFiles = typed;
+    }
+
+    // Take most recent (last in sorted order) up to cap
+    mdFiles = mdFiles.slice(-maxPatterns);
 
     const patterns: string[] = [];
     for (const file of mdFiles) {
@@ -390,7 +400,7 @@ async function loadSuccessPatterns(): Promise<string> {
   }
 }
 
-async function loadFailurePatterns(domain?: string, questionType?: string): Promise<string> {
+async function loadFailurePatterns(domain?: string, questionType?: string, maxPatterns: number = 15): Promise<string> {
   const dir = path.join(SEA_ROOT, "failure-patterns");
   try {
     const files = await readdir(dir);
@@ -407,6 +417,7 @@ async function loadFailurePatterns(domain?: string, questionType?: string): Prom
         const desc = descMatch[1].trim().split("\n")[0];
         patterns.push(`- **${file.replace(".md", "")}:** ${desc}`);
       }
+      if (patterns.length >= maxPatterns) break;
     }
     return patterns.join("\n");
   } catch {
