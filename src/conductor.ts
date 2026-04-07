@@ -334,6 +334,29 @@ export async function runConductorLoop(
   let totalIterations = 0;
 
   while (!stopping && totalIterations < config.maxConductorIterations) {
+    // Completion gate: stop if no open questions remain
+    {
+      const projDir = path.join(SEA_ROOT, "projects", projectName);
+      const allQ = await readQuestions(projDir);
+      const openQuestions = allQ.filter(
+        (q) => q.status === "open"
+      );
+      if (openQuestions.length === 0) {
+        const cState = await readConductorState(projDir);
+        cState.status = "completed";
+        cState.updatedAt = new Date().toISOString();
+        await writeFile(
+          path.join(projDir, "state.json"),
+          JSON.stringify(cState, null, 2),
+          "utf-8"
+        );
+        console.log(
+          `\n✅ Completion gate — all questions resolved. Project status set to "completed".`
+        );
+        break;
+      }
+    }
+
     const result = await runConductorIteration(projectName, config);
     totalIterations++;
 

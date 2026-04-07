@@ -77,7 +77,7 @@ export interface LineageEntry {
 
 export type EpistemicTag = "SOURCE" | "DERIVED" | "ESTIMATED" | "ASSUMED" | "UNKNOWN";
 export type FindingStatus = "provisional" | "verified" | "refuted" | "superseded";
-export type QuestionStatus = "open" | "resolved" | "deferred";
+export type QuestionStatus = "open" | "resolved" | "deferred" | "empirical-gate";
 
 export type EngineeringType =
   | "MEASUREMENT"
