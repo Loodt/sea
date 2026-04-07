@@ -16,6 +16,9 @@ success-patterns/
 dispatch-patterns.md
 CLAUDE-history/
 
+# Global wiki (contains cross-project data)
+global-wiki/
+
 # Claude Code local config
 .claude/settings.local.json
 .claude/notes.md

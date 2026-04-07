@@ -254,4 +254,89 @@ program
     console.log(`See projects/${projectName}/wiki/index.md`);
   });
 
+// ── sea global-wiki [project] ──
+program
+  .command("global-wiki [project]")
+  .description("Promote verified findings from project(s) to the cross-project global wiki")
+  .action(async (projectName?: string) => {
+    const { updateGlobalWikiFromProject } = await import("./global-wiki.js");
+    const projectsDir = path.join(process.cwd(), "projects");
+
+    if (projectName) {
+      const projectDir = path.join(projectsDir, projectName);
+      const result = await updateGlobalWikiFromProject(projectDir, projectName);
+      console.log(
+        `Global wiki updated from ${projectName}: ${result.promoted} promoted, ${result.revoked} revoked, ${result.skipped} skipped`
+      );
+    } else {
+      // Process all projects
+      const { readdir } = await import("node:fs/promises");
+      let projects: string[];
+      try {
+        projects = await readdir(projectsDir);
+      } catch {
+        console.log("No projects directory found.");
+        return;
+      }
+      let totalPromoted = 0;
+      let totalRevoked = 0;
+      for (const p of projects) {
+        try {
+          const result = await updateGlobalWikiFromProject(
+            path.join(projectsDir, p),
+            p
+          );
+          if (result.promoted > 0 || result.revoked > 0) {
+            console.log(
+              `  ${p}: ${result.promoted} promoted, ${result.revoked} revoked, ${result.skipped} skipped`
+            );
+          }
+          totalPromoted += result.promoted;
+          totalRevoked += result.revoked;
+        } catch {
+          // Skip projects without findings
+        }
+      }
+      console.log(
+        `Global wiki: ${totalPromoted} promoted, ${totalRevoked} revoked across ${projects.length} projects`
+      );
+    }
+    console.log("See global-wiki/");
+  });
+
+// ── sea audit <project> ──
+program
+  .command("audit <project>")
+  .description("Run integrity audit on a project's knowledge store, wiki, and questions")
+  .action(async (projectName: string) => {
+    const { runAudit } = await import("./audit.js");
+    const projectDir = path.join(process.cwd(), "projects", projectName);
+    const result = await runAudit(projectDir);
+
+    const issues: string[] = [];
+    if (result.findingIntegrity.sourceWithoutUrl.length > 0)
+      issues.push(`${result.findingIntegrity.sourceWithoutUrl.length} SOURCE findings without URL`);
+    if (result.findingIntegrity.claimDuplicates.length > 0)
+      issues.push(`${result.findingIntegrity.claimDuplicates.length} duplicate claim groups`);
+    if (result.wikiIntegrity.missingFiles.length > 0)
+      issues.push(`${result.wikiIntegrity.missingFiles.length} missing wiki files`);
+    if (result.wikiIntegrity.orphanedFiles.length > 0)
+      issues.push(`${result.wikiIntegrity.orphanedFiles.length} orphaned wiki files`);
+    if (result.questionHealth.staleOpen.length > 0)
+      issues.push(`${result.questionHealth.staleOpen.length} stale open questions`);
+
+    if (issues.length > 0) {
+      console.log(`Audit found ${issues.length} issue(s):`);
+      for (const issue of issues) console.log(`  - ${issue}`);
+    } else {
+      console.log("Audit clean — no issues found.");
+    }
+
+    if (result.convergence.isConverging) {
+      console.log(`Convergence: ${result.convergence.recommendation.toUpperCase()} (${result.convergence.signals.length} signals)`);
+    }
+    console.log(`Dispatch efficiency: ${result.dispatchEfficiency.avgFindings.toFixed(1)} findings/dispatch (${result.dispatchEfficiency.trend})`);
+    console.log(`See projects/${projectName}/output/audit-report.md`);
+  });
+
 program.parse();

@@ -189,6 +189,17 @@ export async function runConductorIteration(
     } catch (err) {
       console.log(`   ⚠ Wiki update failed: ${(err as Error).message}`);
     }
+
+    // Update global wiki (non-fatal — derived from project knowledge store)
+    try {
+      const { updateGlobalWikiFromProject } = await import("./global-wiki.js");
+      const globalResult = await updateGlobalWikiFromProject(projectDir, projectName);
+      if (globalResult.promoted > 0 || globalResult.revoked > 0) {
+        console.log(`   ✓ Global wiki: ${globalResult.promoted} promoted, ${globalResult.revoked} revoked, ${globalResult.skipped} skipped`);
+      }
+    } catch (err) {
+      console.log(`   ⚠ Global wiki update failed: ${(err as Error).message}`);
+    }
   }
 
   // Compute dispatch-level delta (captures findings written by expert + integration)
