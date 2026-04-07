@@ -273,11 +273,11 @@ export interface QuestionSelection {
   questionType: QuestionType;
 }
 
-/** Max inner iterations per question type. Data-hunt capped at 3 (high exhaustion risk). */
+/** Max inner iterations per question type. */
 export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
   landscape: 5,
   "kill-check": 5,
-  "data-hunt": 3,
+  "data-hunt": 5,
   mechanism: 5,
   synthesis: 5,
 };

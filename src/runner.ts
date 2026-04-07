@@ -43,7 +43,7 @@ export async function runSession(
   cwd: string,
   opts?: RunOptions
 ): Promise<RunResult> {
-  const timeoutMs = opts?.timeoutMs ?? 600_000; // 10 min default
+  const timeoutMs = opts?.timeoutMs ?? 900_000; // 15 min default
   const startTime = new Date().toISOString();
   const startMs = Date.now();
 

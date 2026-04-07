@@ -1,7 +1,7 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v020
+- Conductor version: v021
 - Inner loop: plan → research → summarize → synthesize → evaluate → evolve
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
@@ -19,9 +19,9 @@ Selection MUST reject near-duplicate open questions before creating new ones.
 |------|-----|-------------------|
 | landscape | 5 | Broad survey. Dispatch first to establish frontier. |
 | kill-check | 5 | Hypothesis falsification. Prefer when >3 open pathways. |
-| data-hunt | 3 | Specific values. Highest exhaustion risk. |
+| data-hunt | 5 | Specific values. Highest exhaustion risk. Early-exit at iter 2 if 0 findings. |
 | mechanism | 5 | How/why. Full-budget convergence normal. |
-| synthesis | 2 | Combine store findings. Dispatch when store >40 verified. |
+| synthesis | 2 | Combine store findings. Dispatch when store >40 verified. Yield correlates with verified%. |
 
 ## Expert Convergence
 - **answered** — resolved with well-evidenced findings
@@ -29,6 +29,7 @@ Selection MUST reject near-duplicate open questions before creating new ones.
 - **narrowed** — partial progress. Re-dispatch MUST include prior handoff findings *(debt #3)*
 - **exhausted** — diminishing returns. Integration MUST create `[DERIVED: exhaustive-search]` finding
 - **crashed** — infrastructure failure. NOT exhausted, re-dispatch eligible. Integrate partial findings BEFORE persona reset on re-dispatch
+- **empirical-gate** — question requires physical measurement/bench test that literature cannot resolve. Do not re-dispatch; flag for human action
 
 ## Expert Library
 Personas stored by hash in expert-library/library.jsonl. Utility = avgIG x log(dispatches + 1). Factory checks library for matches by questionType + domain overlap (normalized to [0,1]); adapts high-scoring persona (>2.0) instead of creating fresh. Adapted entries track lineage via `adaptedFrom` field.
@@ -38,13 +39,15 @@ Provisional findings auto-graduate to verified when: confidence >= 0.85, tag = S
 
 ## Step Gates
 - **Crash gate:** 2 consecutive crashes → circuit breaker, forced handoff from best successful output. Recovery: zero prior-file loading, single research question, incremental traces, 2 attempts → infrastructure issue
-- **Conductor crash gate:** 2+ different questions crash consecutively → systemic infrastructure failure. Pause and diagnose before next dispatch *(debt #6)*
-- **Hollow answer gate:** answered + 0 findingsAdded → log HOLLOW_ANSWER, do not count as productive convergence *(debt #5)*
+- **Conductor crash gate:** 2+ different questions crash consecutively → systemic infrastructure failure. Pause and diagnose before next dispatch *(debt #5)*
+- **Hollow answer gate:** answered + 0 findingsAdded → log HOLLOW_ANSWER, do not count as productive convergence *(debt #4)*
 - **Crash-score exclusion:** Crash scores MUST NOT trigger rollback *(debt #1)*
 - **Summarize completeness:** Persisted findings must match produced. Log PERSISTENCE_GAP if not *(debt #2)*
 - **Summarize before synthesize:** Store current before report. Finding IDs MUST exist in findings.jsonl
 - **Score persistence:** Evaluate writes JSON scores block. Loop parses/persists. Evaluate MUST NOT write scores.jsonl
 - **Summary size gate:** summary.md MUST stay ≤2KB. Code-enforced: `enforceSummarySize()` runs after every integration
+- **Completion gate:** All questions resolved (0 open, 0 exhausted-pending) → set project status "completed" in state.json. Conductor skips completed projects.
+- **Crash maturity:** Cross-project data: zero crashes after iteration 7. Crashes in mature projects (iter >7) are regressions, not normal — investigate immediately.
 
 ## Multi-Provider Support
 SEA supports multiple LLM CLI backends via `--provider` flag (or `SEA_PROVIDER` env var). Default: `claude`.
@@ -71,12 +74,13 @@ When running `sea conduct` or any long-running CLI command, launch it as a backg
 - Evolve: 2 heuristic failures on same issue → classify as infrastructure, stop trying
 - Summarize MUST receive FULL raw findings — never truncate (32KB budget)
 - ALL failure patterns loaded — no subset limits
-- Expert store writes idempotent: F9XX IDs → sequential; integration deduplicates by finding ID *(claim-text dedup: debt #4)*
+- Expert store writes idempotent: F9XX IDs → sequential; integration deduplicates by finding ID and claim text
 - Landscape dispatches: IG = findingsAdded + questionsAdded (questions are the primary output)
 - All JSONL writes use file-level locking (`file-lock.ts`) for parallelization safety
 - New generalizable failures → failure-patterns/; new successes → success-patterns/
 - Domain-specific experts converge faster — preserve "defining trait" + "core values" in persona creation
 - Kill signals prune entire branches — never deprioritize kill-check questions
+- Verification rate tracks domain maturity, not conductor quality — do not evolve persona to "fix" low verification in source-scarce domains
 
 ## Evolution Protocol
 Three valid outcomes:
@@ -84,6 +88,7 @@ Three valid outcomes:
 2. **Strategic advancement** — update targets when questions resolved/blocked.
 3. **No-change hold** — declare working. Record lineage with reasoning.
 **Stagnation** (2 consecutive non-crash iters, zero findings + zero resolved): classify → exhausted (pivot question), blocked (mark, pivot), wrong (kill, reformulate).
+**Empirical plateau:** When >2 questions exhausted with "needs measurement" AND remaining open questions depend on those measurements → flag project as empirical-gated. Stop dispatching literature-only experts against gated questions.
 Experts are disposable specialists — knowledge store is persistent memory, not persona.
 
 ## Scoring Weights
@@ -101,9 +106,10 @@ Open gaps between protocol and implementation. Do not attempt heuristic fixes �
 1. **Crash-score exclusion** — `crashIteration` field on Score, filter in `isRegressing()`.
 2. **Summarize completeness gate** — Count findings before/after, log PERSISTENCE_GAP.
 3. **Narrowed dispatch rebinding** — Inject prior handoff findings into expert creation.
-4. **Finding deduplication** — Deduplicate by claim text, not just ID.
-5. **Hollow answer detection** — Partially mitigated: landscape IG counts questions, findingsAdded uses max(fileDelta, handoffDelta).
-6. **Conductor crash detection** — Partially mitigated: in-conductor crash retry with fresh persona.
+4. **Hollow answer detection** — Partial: landscape IG counts questions, findingsAdded uses max(fileDelta, handoffDelta). Missing: HOLLOW_ANSWER log for non-landscape types.
+5. **Conductor crash detection** — Partial: in-conductor retry with fresh persona. Missing: 2+ different questions crashing → circuit breaker.
+6. **Early-exit rule enforcement** — Code must force evaluation exit when findingsAdded = 0 by iter 2.
+7. **Crash re-dispatch priority** — Question selector must prefer crashed questions over other open questions.
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
