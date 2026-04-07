@@ -243,6 +243,16 @@ export interface WikiUpdateResult {
  */
 export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> {
   let findings = await readFindings(projectDir);
+
+  // Deduplicate by ID (last-write-wins). JSONL is append-only, so the last
+  // entry for a given ID is the most current. Without this, duplicate IDs
+  // cause non-deterministic hash comparisons and unnecessary rewrites.
+  const deduped = new Map<string, Finding>();
+  for (const f of findings) {
+    deduped.set(f.id, f);
+  }
+  findings = [...deduped.values()];
+
   const manifest = await readManifest(projectDir);
   const result: WikiUpdateResult = { written: 0, skipped: 0, archived: 0, backfilled: 0 };
 
