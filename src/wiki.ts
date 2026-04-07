@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { withFileLock } from "./file-lock.js";
-import { readFindings, updateFinding } from "./knowledge.js";
+import { readFindings, batchUpdateFindings } from "./knowledge.js";
 import type { Finding, EngineeringType } from "./types.js";
 import { ENGINEERING_TYPE_PRIORITY } from "./types.js";
 
@@ -90,8 +90,10 @@ export function findingContentHash(finding: Finding): string {
 
 /**
  * Build the complete markdown content for a wiki node.
+ * @param wikiPathMap Optional map from finding ID to wiki path (e.g. "wiki/facts/F002.md")
+ *   for resolving cross-folder links. Without it, linked findings use same-folder relative links.
  */
-export function buildWikiNode(finding: Finding): string {
+export function buildWikiNode(finding: Finding, wikiPathMap?: Map<string, string>): string {
   const engType = finding.engineeringType ?? inferEngineeringType(finding);
   const humanReview =
     finding.humanReviewRequired ?? (engType === "ASSUMPTION" || engType === "HYPOTHESIS");
@@ -157,7 +159,21 @@ export function buildWikiNode(finding: Finding): string {
   }
 
   if (finding.linkedFindings?.length) {
-    const links = finding.linkedFindings.map((id) => `[${id}](./${id}.md)`).join(", ");
+    const links = finding.linkedFindings
+      .map((id) => {
+        if (wikiPathMap) {
+          const targetPath = wikiPathMap.get(id);
+          if (targetPath) {
+            // Resolve cross-folder relative link from this node's folder
+            const thisFolder = classifyToFolder(engType);
+            const targetRel = targetPath.replace(/^wiki\//, "");
+            return `[${id}](../${targetRel})`;
+          }
+        }
+        // Fallback: same-folder link (may break for cross-type links)
+        return `[${id}](./${id}.md)`;
+      })
+      .join(", ");
     body.push("", `**Related findings**: ${links}`);
   }
 
@@ -192,13 +208,17 @@ async function writeManifest(projectDir: string, manifest: WikiManifest): Promis
 /**
  * Write a single finding as a wiki node. Returns the relative path (forward slashes).
  */
-export async function writeWikiNode(projectDir: string, finding: Finding): Promise<string> {
+export async function writeWikiNode(
+  projectDir: string,
+  finding: Finding,
+  wikiPathMap?: Map<string, string>
+): Promise<string> {
   const engType = finding.engineeringType ?? inferEngineeringType(finding);
   const folder = classifyToFolder(engType);
   const wikiDir = path.join(projectDir, "wiki", folder);
   await mkdir(wikiDir, { recursive: true });
 
-  const content = buildWikiNode(finding);
+  const content = buildWikiNode(finding, wikiPathMap);
   const filePath = path.join(wikiDir, `${finding.id}.md`);
   await writeFile(filePath, content, "utf-8");
 
@@ -222,7 +242,7 @@ export interface WikiUpdateResult {
  * - Archives nodes for refuted/superseded/deleted findings
  */
 export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> {
-  const findings = await readFindings(projectDir);
+  let findings = await readFindings(projectDir);
   const manifest = await readManifest(projectDir);
   const result: WikiUpdateResult = { written: 0, skipped: 0, archived: 0, backfilled: 0 };
 
@@ -232,19 +252,23 @@ export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> 
     manifestMap.set(entry.findingId, entry);
   }
 
-  // Backfill pass: enrich old findings that lack engineeringType
-  for (const finding of findings) {
-    if (!finding.engineeringType) {
-      const inferred = inferEngineeringType(finding);
-      const humanReview = inferred === "ASSUMPTION" || inferred === "HYPOTHESIS";
-      finding.engineeringType = inferred;
-      finding.humanReviewRequired = humanReview;
-      await updateFinding(projectDir, finding.id, {
-        engineeringType: inferred,
-        humanReviewRequired: humanReview,
-      });
-      result.backfilled++;
-    }
+  // Backfill pass: batch-enrich old findings that lack engineeringType.
+  // Single atomic read-modify-write instead of N individual updateFinding calls.
+  const missingTypeCount = findings.filter((f) => !f.engineeringType).length;
+  if (missingTypeCount > 0) {
+    await batchUpdateFindings(projectDir, (allFindings) => {
+      for (const f of allFindings) {
+        if (!f.engineeringType) {
+          f.engineeringType = inferEngineeringType(f);
+          f.humanReviewRequired =
+            f.engineeringType === "ASSUMPTION" || f.engineeringType === "HYPOTHESIS";
+        }
+      }
+      return allFindings;
+    });
+    // Re-read so in-memory findings reflect the persisted state
+    findings = await readFindings(projectDir);
+    result.backfilled = missingTypeCount;
   }
 
   // Determine which findings should have wiki nodes
@@ -255,6 +279,20 @@ export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> 
       f.status !== "superseded"
   );
   const eligibleIds = new Set(eligibleFindings.map((f) => f.id));
+
+  // Build a wiki path map for cross-folder link resolution.
+  // Includes both existing manifest entries and new paths computed ahead of time.
+  const wikiPathMap = new Map<string, string>();
+  for (const entry of manifest.entries) {
+    wikiPathMap.set(entry.findingId, entry.wikiPath);
+  }
+  for (const f of eligibleFindings) {
+    if (!wikiPathMap.has(f.id)) {
+      const engType = f.engineeringType ?? inferEngineeringType(f);
+      const folder = classifyToFolder(engType);
+      wikiPathMap.set(f.id, `wiki/${folder}/${f.id}.md`);
+    }
+  }
 
   // Write/update eligible findings
   const newEntries: WikiManifestEntry[] = [];
@@ -268,7 +306,7 @@ export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> 
       result.skipped++;
     } else {
       // New or changed — write wiki node
-      const wikiPath = await writeWikiNode(projectDir, finding);
+      const wikiPath = await writeWikiNode(projectDir, finding, wikiPathMap);
       newEntries.push({
         findingId: finding.id,
         contentHash: hash,
@@ -301,26 +339,29 @@ export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> 
     }
   }
 
-  // Write updated manifest
+  // Write updated manifest and rebuild index (pass manifest directly, no re-read)
   manifest.entries = newEntries;
   await mkdir(path.join(projectDir, "wiki"), { recursive: true });
   await writeManifest(projectDir, manifest);
-
-  // Rebuild index
-  await updateWikiIndex(projectDir, findings);
+  await updateWikiIndex(projectDir, findings, manifest);
 
   return result;
 }
 
 /**
  * Regenerate wiki/index.md from findings and manifest.
+ * Accepts manifest directly to avoid redundant disk I/O when called from updateWiki.
  */
-export async function updateWikiIndex(projectDir: string, findings: Finding[]): Promise<void> {
-  const manifest = await readManifest(projectDir);
-  if (manifest.entries.length === 0) return;
+export async function updateWikiIndex(
+  projectDir: string,
+  findings: Finding[],
+  manifest?: WikiManifest
+): Promise<void> {
+  const m = manifest ?? await readManifest(projectDir);
+  if (m.entries.length === 0) return;
 
-  const entryIds = new Set(manifest.entries.map((e) => e.findingId));
-  const wikiPathMap = new Map(manifest.entries.map((e) => [e.findingId, e.wikiPath]));
+  const entryIds = new Set(m.entries.map((e) => e.findingId));
+  const wikiPathMap = new Map(m.entries.map((e) => [e.findingId, e.wikiPath]));
 
   // Only include findings that have wiki nodes
   const wikiFindingsUnsorted = findings.filter((f) => entryIds.has(f.id));
@@ -336,7 +377,7 @@ export async function updateWikiIndex(projectDir: string, findings: Finding[]): 
   const lines: string[] = [
     "# Engineering Knowledge Wiki",
     "",
-    `*${manifest.entries.length} nodes across ${byDomain.size} domains*`,
+    `*${m.entries.length} nodes across ${byDomain.size} domains*`,
     "",
     "---",
     "",

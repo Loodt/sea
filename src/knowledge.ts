@@ -68,6 +68,13 @@ export async function updateFinding(
   });
 }
 
+export async function batchUpdateFindings(
+  projectDir: string,
+  updateFn: (findings: Finding[]) => Finding[]
+): Promise<void> {
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), updateFn);
+}
+
 export function queryFindings(
   findings: Finding[],
   opts: {

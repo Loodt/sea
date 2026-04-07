@@ -250,10 +250,24 @@ describe("buildWikiNode", () => {
     expect(content).toContain("**Superseded** by [F099](./F099.md)");
   });
 
-  it("includes linked findings", () => {
+  it("includes linked findings with same-folder fallback", () => {
     const content = buildWikiNode(makeFinding({ linkedFindings: ["F002", "F003"] }));
     expect(content).toContain("[F002](./F002.md)");
     expect(content).toContain("[F003](./F003.md)");
+  });
+
+  it("resolves cross-folder linked finding paths via wikiPathMap", () => {
+    const pathMap = new Map([
+      ["F002", "wiki/relationships/F002.md"],
+      ["F003", "wiki/assumptions/F003.md"],
+    ]);
+    const content = buildWikiNode(
+      makeFinding({ engineeringType: "MEASUREMENT", linkedFindings: ["F002", "F003"] }),
+      pathMap
+    );
+    // From facts/F001.md, link to relationships/F002.md is ../relationships/F002.md
+    expect(content).toContain("[F002](../relationships/F002.md)");
+    expect(content).toContain("[F003](../assumptions/F003.md)");
   });
 
   it("flags ASSUMPTION for human review", () => {
