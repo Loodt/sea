@@ -205,6 +205,7 @@ async function assembleExpertPrompt(
   const isFirstIter = innerIter === 1;
   const isFinalIter = innerIter === config.maxIterations;
   const searchBudget = QUESTION_TYPE_SEARCH_BUDGET[config.questionType] ?? 5;
+  const isReasoningType = config.questionType === "first-principles" || config.questionType === "design-space";
 
   // First iteration: compact context with file reference to full persona.
   // Full persona is at {expertDir}/persona.md — the subprocess reads it directly.
@@ -223,9 +224,50 @@ async function assembleExpertPrompt(
 
     const personaPath = path.join(config.expertDir, "persona.md");
 
-    const assembled = `You are a research expert. Your full persona with workflow stages and domain knowledge is at:
+    // --- Reasoning-type first iteration prompt (first-principles / design-space) ---
+    const reasoningPacingConstraint = `You may make at most ${searchBudget} web search${searchBudget === 1 ? "" : "es"} in this iteration, and ONLY to verify a specific value needed for your derivation (a constant, a threshold, a published standard). Do NOT use search for discovery or survey. Your primary tool is REASONING from the findings and axioms provided below. You have ${config.maxIterations} iterations total.`;
+
+    const researchPacingConstraint = `You may make at most ${searchBudget} web searches in this iteration. After completing your searches, synthesize findings from what you discovered. You have ${config.maxIterations} iterations total — distribute your research across all iterations rather than attempting comprehensive coverage in one pass.`;
+
+    const reasoningScopeConstraint = `Execute Stage 1 of your workflow: state your axioms and assumptions explicitly, then begin your derivation. Every step of your reasoning must be traceable. If you reach a point where you need empirical data not in the knowledge store, flag it as [UNKNOWN] and state the cheapest way to obtain it.`;
+
+    const researchScopeConstraint = `Execute ONLY Stage 1 of your workflow in this iteration. Do NOT proceed to Stage 2 or beyond. End with your Stage 1 findings and a NEXT ITERATION PLAN describing what Stage 2 should cover.`;
+
+    const reasoningInstructions = `1. Read your full persona from ${personaPath} — it contains your staged workflow, domain knowledge, and failure modes.
+2. State your premises: list each verified finding and domain axiom you will reason from. Cite finding IDs where available.
+3. Perform your derivation with ALL working shown — every logical step, every calculation, every assumption.
+4. For each conclusion, produce a derivation chain:
+   - PREMISES: [list of finding IDs and/or stated axioms]
+   - METHOD: [deduction | calculation | constraint-analysis | analogy]
+   - ASSUMPTIONS: [list each assumption explicitly]
+   - UNCERTAINTY: [what could invalidate this conclusion]
+5. Tag findings as [DERIVED: first-principles] or [DERIVED: design-analysis]. If you used a search for validation, tag the validated claim as [SOURCE: url].
+6. Write findings to knowledge/findings.jsonl (append, don't overwrite):
+   Each line: {"id": "F{NNN}", "claim": "...", "tag": "DERIVED", "source": null, "confidence": 0.0-1.0, "domain": "...", "iteration": 1, "status": "provisional", "verifiedAt": null, "supersededBy": null, "derivationChain": {"premises": ["F001", "axiom: ..."], "method": "deduction", "assumptions": ["..."], "uncertaintyNote": "..."}}
+   Use IDs starting from F901 to avoid collision with existing findings (the conductor will reassign IDs).
+7. Update knowledge/questions.jsonl if any open questions are resolved by your derivations.
+8. Check convergence. If your derivation reaches a dead end requiring empirical data, converge as "narrowed" with the specific data need as a new question.
+9. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.`;
+
+    const researchInstructions = `1. Read your full persona from ${personaPath} — it contains your staged workflow, domain knowledge, and failure modes.
+2. Follow your persona's staged workflow. Begin with the fast-kill check.
+3. Use web search and web fetch to gather evidence. Tag every claim with its epistemic basis.
+4. After synthesizing, CHECK your key findings:
+   - Does each finding have a source URL or derivation method?
+   - Could any finding be wrong? What would that mean?
+   - Are there contradictions with existing knowledge?
+5. Write findings incrementally to knowledge/findings.jsonl (append, don't overwrite):
+   Each line: {"id": "F{NNN}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": 1, "status": "provisional", "verifiedAt": null, "supersededBy": null}
+   Use IDs starting from F901 to avoid collision with existing findings (the conductor will reassign IDs).
+6. Update knowledge/questions.jsonl if any open questions are resolved by your findings.
+7. Check convergence against your criteria. If you can determine a status (answered/killed/narrowed), include the HANDOFF block.
+8. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.`;
+
+    const expertRole = isReasoningType ? "a reasoning expert" : "a research expert";
+
+    const assembled = `You are ${expertRole}. Your full persona with workflow stages and domain knowledge is at:
 ${personaPath}
-**Read that file first** before doing any research. It contains your identity, mental models, failure modes, and staged workflow.
+**Read that file first** before doing any ${isReasoningType ? "reasoning" : "research"}. It contains your identity, mental models, failure modes, and staged workflow.
 
 Your working directory is: ${config.projectDir}
 
@@ -237,10 +279,10 @@ Question ID: ${config.questionId}
 This is your FIRST iteration.
 
 ## PACING CONSTRAINT
-You may make at most ${searchBudget} web searches in this iteration. After completing your searches, synthesize findings from what you discovered. You have ${config.maxIterations} iterations total — distribute your research across all iterations rather than attempting comprehensive coverage in one pass.
+${isReasoningType ? reasoningPacingConstraint : researchPacingConstraint}
 
 ## SCOPE CONSTRAINT
-Execute ONLY Stage 1 of your workflow in this iteration. Do NOT proceed to Stage 2 or beyond. End with your Stage 1 findings and a NEXT ITERATION PLAN describing what Stage 2 should cover.
+${isReasoningType ? reasoningScopeConstraint : researchScopeConstraint}
 
 ## STAGE 1 (from your persona)
 ${stage1 || "(Read Stage 1 from your persona file)"}
@@ -256,19 +298,7 @@ ${summary || "(No prior knowledge in the store)"}
 ${findingsContext}
 
 ## INSTRUCTIONS
-1. Read your full persona from ${personaPath} — it contains your staged workflow, domain knowledge, and failure modes.
-2. Follow your persona's staged workflow. Begin with the fast-kill check.
-3. Use web search and web fetch to gather evidence. Tag every claim with its epistemic basis.
-4. After synthesizing, CHECK your key findings:
-   - Does each finding have a source URL or derivation method?
-   - Could any finding be wrong? What would that mean?
-   - Are there contradictions with existing knowledge?
-5. Write findings incrementally to knowledge/findings.jsonl (append, don't overwrite):
-   Each line: {"id": "F{NNN}", "claim": "...", "tag": "SOURCE|DERIVED|ESTIMATED|ASSUMED|UNKNOWN", "source": "url or null", "confidence": 0.0-1.0, "domain": "...", "iteration": 1, "status": "provisional", "verifiedAt": null, "supersededBy": null}
-   Use IDs starting from F901 to avoid collision with existing findings (the conductor will reassign IDs).
-6. Update knowledge/questions.jsonl if any open questions are resolved by your findings.
-7. Check convergence against your criteria. If you can determine a status (answered/killed/narrowed), include the HANDOFF block.
-8. If not converged and more iterations remain, end with a brief 'NEXT ITERATION PLAN' section.
+${isReasoningType ? reasoningInstructions : researchInstructions}
 
 ## HANDOFF FORMAT (include when converged or on final iteration)
 \`\`\`json
@@ -276,7 +306,7 @@ ${findingsContext}
   "questionId": "${config.questionId}",
   "status": "answered|killed|narrowed|exhausted",
   "exhaustionReason": "data-gap|strategy-limit|infrastructure (only if status is exhausted)",
-  "findings": [{"id": "F9XX", "claim": "...", "tag": "SOURCE", "source": "url", "confidence": 0.8, "domain": "..."}],
+  "findings": [{"id": "F9XX", "claim": "...", "tag": "${isReasoningType ? "DERIVED" : "SOURCE"}", "source": "${isReasoningType ? "null" : "url"}", "confidence": 0.8, "domain": "..."${isReasoningType ? ', "derivationChain": {"premises": ["..."], "method": "deduction", "assumptions": ["..."], "uncertaintyNote": "..."}' : ""}}],
   "questionUpdates": [{"id": "QXXX", "status": "resolved", "resolvedBy": "F9XX"}],
   "newQuestions": [{"question": "...", "priority": "high", "domain": "...", "context": "..."}],
   "summary": "3-5 sentence summary",
@@ -303,7 +333,31 @@ ${findingsContext}
 - **Blockers:** ${priorState.blockers.length > 0 ? priorState.blockers.join("; ") : "none"}`
     : `## PRIOR ITERATION OUTPUT (truncated)\n${priorOutput}`;
 
-  return `You are a research expert. Continue your investigation.
+  // --- Reasoning-type subsequent iteration pacing ---
+  const reasoningSubsequentPacing = `You may make at most ${isFinalIter ? searchBudget + 1 : searchBudget} web search${searchBudget === 1 ? "" : "es"}, ONLY for validation of specific values.${isFinalIter ? " Synthesize all derivations across prior iterations, then produce your HANDOFF block." : " Your primary tool remains REASONING."}`;
+
+  const researchSubsequentPacing = `You may make at most ${isFinalIter ? searchBudget + 2 : searchBudget} web searches in this iteration.${isFinalIter ? " Use them to fill critical gaps, then synthesize all findings gathered across prior iterations." : " Synthesize findings from what you discover."}`;
+
+  const reasoningSubsequentScope = isFinalIter
+    ? "Synthesize all derivations across prior iterations. Verify your derivation chain is complete and internally consistent. Produce your HANDOFF block."
+    : "Continue your derivation from where the prior iteration stopped. Review your prior premises and conclusions. Extend, refine, or challenge them. Do not restart from scratch.";
+
+  const researchSubsequentScope = isFinalIter
+    ? "Synthesize all findings gathered across prior iterations. You may do a small number of additional searches to fill critical gaps, then produce your HANDOFF block."
+    : "Continue to the next stage of your workflow from where the prior iteration stopped. Do not attempt to cover all remaining stages in one iteration.";
+
+  const reasoningSubsequentInstructions = `1. Continue your derivation from where the prior iteration stopped.
+2. Review prior premises and conclusions — extend, refine, or challenge them.
+3. Tag every claim: [DERIVED: method], [ESTIMATED: basis], [ASSUMED], [UNKNOWN]. Include derivationChain for each derived finding.
+4. Write new findings to knowledge/findings.jsonl (append, F9XX IDs).
+5. Check convergence. ${isFinalIter ? "You MUST include a HANDOFF block — use 'exhausted' if not converged." : "If your derivation needs empirical data, converge as 'narrowed'. Otherwise end with NEXT ITERATION PLAN."}`;
+
+  const researchSubsequentInstructions = `1. Continue your persona's staged workflow from where the prior iteration stopped.
+2. Use web search and web fetch to gather evidence. Tag every claim: [SOURCE: url], [DERIVED: method], [ESTIMATED: basis], [ASSUMED], [UNKNOWN].
+3. Write new findings to knowledge/findings.jsonl (append, F9XX IDs).
+4. Check convergence. ${isFinalIter ? "You MUST include a HANDOFF block — use 'exhausted' if not converged." : "Include HANDOFF if converged, otherwise end with NEXT ITERATION PLAN."}`;
+
+  return `You are ${isReasoningType ? "a reasoning expert" : "a research expert"}. Continue your ${isReasoningType ? "derivation" : "investigation"}.
 
 Your working directory is: ${config.projectDir}
 
@@ -315,10 +369,10 @@ Question ID: ${config.questionId}
 ${isFinalIter ? "This is your FINAL iteration. You MUST produce a HANDOFF block regardless of convergence." : "Continue from where the prior iteration left off."}
 
 ## PACING CONSTRAINT
-You may make at most ${isFinalIter ? searchBudget + 2 : searchBudget} web searches in this iteration.${isFinalIter ? " Use them to fill critical gaps, then synthesize all findings gathered across prior iterations." : " Synthesize findings from what you discover."}
+${isReasoningType ? reasoningSubsequentPacing : researchSubsequentPacing}
 
 ## SCOPE CONSTRAINT
-${isFinalIter ? "Synthesize all findings gathered across prior iterations. You may do a small number of additional searches to fill critical gaps, then produce your HANDOFF block." : "Continue to the next stage of your workflow from where the prior iteration stopped. Do not attempt to cover all remaining stages in one iteration."}
+${isReasoningType ? reasoningSubsequentScope : researchSubsequentScope}
 
 ${stateSection}
 
@@ -326,10 +380,7 @@ ${stateSection}
 ${config.convergenceCriteria}
 
 ## INSTRUCTIONS
-1. Continue your persona's staged workflow from where the prior iteration stopped.
-2. Use web search and web fetch to gather evidence. Tag every claim: [SOURCE: url], [DERIVED: method], [ESTIMATED: basis], [ASSUMED], [UNKNOWN].
-3. Write new findings to knowledge/findings.jsonl (append, F9XX IDs).
-4. Check convergence. ${isFinalIter ? "You MUST include a HANDOFF block — use 'exhausted' if not converged." : "Include HANDOFF if converged, otherwise end with NEXT ITERATION PLAN."}
+${isReasoningType ? reasoningSubsequentInstructions : researchSubsequentInstructions}
 
 ## HANDOFF FORMAT
 \`\`\`json
@@ -337,7 +388,7 @@ ${config.convergenceCriteria}
   "questionId": "${config.questionId}",
   "status": "answered|killed|narrowed|exhausted",
   "exhaustionReason": "data-gap|strategy-limit|infrastructure (only if status is exhausted)",
-  "findings": [{"id": "F9XX", "claim": "...", "tag": "SOURCE", "source": "url", "confidence": 0.8, "domain": "..."}],
+  "findings": [{"id": "F9XX", "claim": "...", "tag": "${isReasoningType ? "DERIVED" : "SOURCE"}", "source": "${isReasoningType ? "null" : "url"}", "confidence": 0.8, "domain": "..."${isReasoningType ? ', "derivationChain": {"premises": ["..."], "method": "deduction", "assumptions": ["..."], "uncertaintyNote": "..."}' : ""}}],
   "questionUpdates": [{"id": "QXXX", "status": "resolved", "resolvedBy": "F9XX"}],
   "newQuestions": [{"question": "...", "priority": "high", "domain": "...", "context": "..."}],
   "summary": "3-5 sentence summary",

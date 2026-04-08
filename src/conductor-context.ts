@@ -162,8 +162,23 @@ export async function assembleQuestionSelectionPrompt(
   const exhaustedCount = exhaustedQuestionIds.length;
   const pruningMode = openCount > 15 || (resolvedCount > 0 && openCount / resolvedCount > 2);
 
+  // Compute verified findings per domain for reasoning-type prerequisite checks
+  const verifiedByDomain: Record<string, number> = {};
+  for (const f of findings) {
+    if (f.status === "verified") {
+      verifiedByDomain[f.domain] = (verifiedByDomain[f.domain] || 0) + 1;
+    }
+  }
+  const domainMaturityText = Object.entries(verifiedByDomain).length > 0
+    ? Object.entries(verifiedByDomain)
+        .sort(([, a], [, b]) => b - a)
+        .map(([d, c]) => `${d}: ${c} verified`)
+        .join(", ")
+    : "none";
+
   const statsText = [
     `Total findings: ${findings.length} (${findings.filter((f) => f.status === "verified").length} verified)`,
+    `Verified by domain: ${domainMaturityText}`,
     `Open questions: ${openCount} | Resolved: ${resolvedCount} | Exhausted: ${exhaustedCount}`,
     `Open:Resolved ratio: ${resolvedCount > 0 ? (openCount / resolvedCount).toFixed(1) : "∞"}:1`,
     `Conductor iteration: ${conductorIteration}`,
@@ -200,7 +215,14 @@ Then select the first one.` : ""}
 
 ## Instructions
 1. Analyse the open questions against the selection criteria
-2. Classify the question type (landscape, kill-check, data-hunt, or mechanism)
+2. Classify the question type:
+   - **landscape** — broad frontier mapping
+   - **kill-check** — hypothesis falsification
+   - **data-hunt** — specific data retrieval
+   - **mechanism** — causal how/why
+   - **synthesis** — combine existing findings
+   - **first-principles** — derive novel conclusions from axioms + verified findings. USE WHEN: question requires conclusion not findable by search, OR ≥2 data-hunts exhausted on same topic, OR question asks for a derived/calculated answer. PREREQUISITE: ≥5 verified findings in the question's domain.
+   - **design-space** — map solution options from constraints. USE WHEN: question asks to compare approaches, OR ≥3 mechanism questions resolved and next step is "which approach is best". PREREQUISITE: ≥5 verified findings in the question's domain.
 3. Select exactly ONE question
 4. Output your selection as a JSON code block:
 
@@ -208,10 +230,10 @@ Then select the first one.` : ""}
 {
   "questionId": "Q___",
   "question": "the full question text",
-  "questionType": "landscape|kill-check|data-hunt|mechanism|synthesis",
+  "questionType": "landscape|kill-check|data-hunt|mechanism|synthesis|first-principles|design-space",
   "reasoning": "why this question has the highest value right now (2-3 sentences)",
   "relevantFindingIds": ["F001", "F003"],
-  "suggestedExpertType": "descriptive label for the expert needed (e.g., 'chlorination process chemist')",
+  "suggestedExpertType": "descriptive label for the expert needed (e.g., 'chlorination process chemist' or 'thermodynamic reasoner')",
   "estimatedIterations": 3
 }
 \`\`\`

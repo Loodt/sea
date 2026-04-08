@@ -102,6 +102,8 @@ export const QUESTION_TYPE_CONTEXT_FILTER: Record<string, EngineeringType[]> = {
   synthesis: ["DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
   "data-hunt": ["MEASUREMENT", "STANDARD"],
   landscape: ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
+  "first-principles": ["MEASUREMENT", "STANDARD", "DERIVED"],
+  "design-space": ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN"],
 };
 
 export interface Finding {
@@ -129,6 +131,12 @@ export interface Finding {
   };
   linkedFindings?: string[];
   humanReviewRequired?: boolean;
+  derivationChain?: {
+    premises: string[];      // Finding IDs or stated axioms
+    method: string;          // "deduction" | "calculation" | "constraint-analysis" | "analogy"
+    assumptions: string[];   // Explicitly stated assumptions
+    uncertaintyNote?: string; // What could invalidate this
+  };
 }
 
 export interface Question {
@@ -261,7 +269,7 @@ export interface ExpertConfig {
   provider?: Provider;
 }
 
-export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis";
+export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis" | "first-principles" | "design-space";
 
 export interface QuestionSelection {
   questionId: string;
@@ -280,6 +288,8 @@ export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
   "data-hunt": 5,
   mechanism: 5,
   synthesis: 5,
+  "first-principles": 3,
+  "design-space": 4,
 };
 
 /** Max web searches per inner iteration, by question type. */
@@ -289,6 +299,8 @@ export const QUESTION_TYPE_SEARCH_BUDGET: Record<QuestionType, number> = {
   "kill-check": 5,
   mechanism: 6,
   synthesis: 3,
+  "first-principles": 1,
+  "design-space": 2,
 };
 
 export interface ConductorState extends ProjectState {

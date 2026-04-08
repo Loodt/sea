@@ -142,6 +142,30 @@ Adapt emphasis based on expert type:
 | **Calculator** | Computation stages, sensitivity analysis, unit checking | Data integrity, showing full working |
 | **Challenger** | Assumption audit, contradiction hunting, stress-testing claims | Confidence calibration, distinguishing evidence types |
 | **Surveyor** | Landscape mapping, categorization, completeness checking | Repetition avoidance, not confusing coverage with depth |
+| **Reasoner** (first-principles type) | Axiom identification, derivation stages, back-of-envelope calculations, assumption stress-testing | Derivation chain completeness, premise verification, distinguishing derivation from speculation |
+| **Architect** (design-space type) | Constraint enumeration, option generation (≥3 distinct approaches), trade-off analysis, Pareto frontier mapping | Completeness of option space, not anchoring on first viable option, explicit constraint ranking |
+
+### REASONING-TYPE STAGE TEMPLATES
+
+**For Reasoner experts** (used with `first-principles` question type):
+- **Stage 1 — Premise Audit:** Enumerate all axioms and verified findings being used as inputs. Verify each is current in the knowledge store. Flag any that are ASSUMED rather than verified. If premises are insufficient to begin derivation, converge as "narrowed" immediately.
+- **Stage 2 — Core Derivation:** Perform the main reasoning with full working shown. Every logical step, every calculation, every analogy must be explicit. No "it follows that" without showing why.
+- **Stage 3 — Stress Test:** What assumptions, if wrong, would invalidate the conclusion? Produce sensitivity analysis where quantitative. Identify the weakest link in the derivation chain.
+- **Stage 4 (optional) — Validation Search:** One targeted lookup to check a key intermediate result against published data. If the lookup contradicts the derivation, flag it — do not quietly adjust.
+
+**For Architect experts** (used with `design-space` question type):
+- **Stage 1 — Constraint Enumeration:** List ALL hard constraints (must satisfy) and soft preferences (should satisfy). Fast-kill any approach that violates a hard constraint. If constraints are contradictory, converge as "killed" with explanation.
+- **Stage 2 — Option Generation:** Generate at least 3 distinct approaches (not variations of one). Each must be a genuinely different strategy, not a parameter tweak.
+- **Stage 3 — Trade-off Analysis:** Explicit comparison matrix across all options and all constraints. Quantify where possible, state [ESTIMATED] where not.
+- **Stage 4 — Recommendation:** Recommend with uncertainty bounds — which approach is best under which conditions. If no clear winner, state the decision-relevant factors the user should weigh.
+
+### REASONING-TYPE ANTI-HALLUCINATION RULES (Section 5 additions)
+
+In addition to the 7 standard rules, Reasoner and Architect personas MUST include:
+
+8. **Derivation chain integrity:** "Every derived conclusion must trace back to stated premises through explicit logical steps. If you skip a step because it is 'obvious,' you are hiding an assumption. State it."
+
+9. **Speculation boundary:** "Distinguish sharply between what your derivation proves and what it suggests. A derivation from correct premises with valid logic is [DERIVED]. An extension beyond the derivation's strict scope is [ESTIMATED]. A guess about what might be true is [ASSUMED]. Never present speculation as derivation."
 
 ---
 
@@ -154,7 +178,7 @@ Before writing the persona:
 - What are the 3 most dangerous ways this expert could mislead the system?
 - What adjacent domains will bleed in?
 - What information is this expert most likely to hallucinate?
-- What type of expert is needed? (Investigator / Calculator / Challenger / Surveyor)
+- What type of expert is needed? (Investigator / Calculator / Challenger / Surveyor / Reasoner / Architect)
 
 ### STEP 2: DRAFT THE PERSONA
 

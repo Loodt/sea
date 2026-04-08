@@ -12,12 +12,16 @@ function computeOverall(scores: {
   coherence?: number;
   insightQuality?: number;
   processCompliance?: number;
-}): number {
+}, questionType?: string): number {
   const a = scores.accuracy ?? 0;
   const cov = scores.coverage ?? 0;
   const coh = scores.coherence ?? 0;
   const iq = scores.insightQuality ?? 0;
   const pc = scores.processCompliance ?? 0;
+  // Reasoning types: boost insight quality, reduce coverage weight
+  if (questionType === "first-principles" || questionType === "design-space") {
+    return a * 0.25 + cov * 0.10 + coh * 0.15 + iq * 0.30 + pc * 0.20;
+  }
   return a * 0.25 + cov * 0.20 + coh * 0.15 + iq * 0.20 + pc * 0.20;
 }
 
@@ -30,7 +34,8 @@ function computeOverall(scores: {
 export function parseScoresFromText(
   text: string,
   iteration: number,
-  personaVersion: number
+  personaVersion: number,
+  questionType?: string
 ): Score | null {
   if (!text) return null;
 
@@ -38,19 +43,19 @@ export function parseScoresFromText(
   const jsonBlockMatch = text.match(/```json\s*\n([\s\S]*?)\n\s*```/);
   if (jsonBlockMatch) {
     const parsed = tryParseScoreJson(jsonBlockMatch[1].trim());
-    if (parsed) return buildScore(parsed, iteration, personaVersion);
+    if (parsed) return buildScore(parsed, iteration, personaVersion, questionType);
   }
 
   // Strategy 2: Inline JSON with score fields (no code block)
   const inlineMatch = text.match(/\{[^{}]*"accuracy"\s*:\s*\d[\s\S]*?\}/);
   if (inlineMatch) {
     const parsed = tryParseScoreJson(inlineMatch[0]);
-    if (parsed) return buildScore(parsed, iteration, personaVersion);
+    if (parsed) return buildScore(parsed, iteration, personaVersion, questionType);
   }
 
   // Strategy 3: Field extraction from text patterns
   const fields = extractScoreFields(text);
-  if (fields) return buildScore(fields, iteration, personaVersion);
+  if (fields) return buildScore(fields, iteration, personaVersion, questionType);
 
   return null;
 }
@@ -95,7 +100,8 @@ function extractScoreFields(text: string): Record<string, number> | null {
 function buildScore(
   raw: Record<string, number>,
   iteration: number,
-  personaVersion: number
+  personaVersion: number,
+  questionType?: string
 ): Score {
   return {
     iteration,
@@ -106,7 +112,7 @@ function buildScore(
     coherence: raw.coherence ?? 0,
     insightQuality: raw.insightQuality ?? 0,
     processCompliance: raw.processCompliance ?? 0,
-    overall: raw.overall ?? computeOverall(raw),
+    overall: raw.overall ?? computeOverall(raw, questionType),
   };
 }
 
@@ -117,11 +123,12 @@ function buildScore(
 export async function parseScoresFromFile(
   filePath: string,
   iteration: number,
-  personaVersion: number
+  personaVersion: number,
+  questionType?: string
 ): Promise<Score | null> {
   try {
     const content = await readFile(filePath, "utf-8");
-    return parseScoresFromText(content, iteration, personaVersion);
+    return parseScoresFromText(content, iteration, personaVersion, questionType);
   } catch {
     return null;
   }

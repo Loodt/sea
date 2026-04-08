@@ -23,6 +23,9 @@
 - **Data-hunt admission:** dispatch only when the target datum, likely source class, and decision unlocked are named; otherwise reformulate as kill-check or landscape
 - **Data-hunt exhaustion bias:** if a data-hunt produces 0 concrete data by iter 2, treat the gap as structural and pivot to synthesis, indirect estimation, or empirical-gate review
 - **Synthesis admission:** dispatch only when the question names the contradiction, branch decision, closeout target, or sensitivity check it will resolve from existing findings
+- **First-principles admission:** dispatch when the question requires a novel derived conclusion (not findable by search), OR ≥2 data-hunts exhausted on the same topic, OR the question asks for a calculated/derived answer. PREREQUISITE: ≥5 verified findings in the question's domain. Expert is a Reasoner — search budget is 1 (validation only).
+- **Design-space admission:** dispatch when the question asks to compare approaches, OR ≥3 mechanism questions resolved and next step is "which approach is best". PREREQUISITE: ≥5 verified findings in the question's domain. Expert is an Architect — search budget is 2 (validation only).
+- **Reasoning prerequisite gate:** do NOT dispatch first-principles or design-space on a thin knowledge store. If verified count in the target domain is <5, dispatch data-hunt or mechanism first to build the foundation.
 - **Mature-store bias:** when verified findings >25, or recent dispatches add findings without movement, boost synthesis before more mechanism/landscape work
 - **Early-exit gate:** any question type with 0 findings by iter 2 forces early-exit evaluation
 
@@ -33,6 +36,8 @@
 | data-hunt | 5 | A specific public datum likely exists and the decision unlocked is named |
 | mechanism | 5 | How/why question constrained by prior findings and tied to a live branch |
 | synthesis | 5 | Existing findings can resolve a named contradiction, branch, closeout, or sensitivity check |
+| first-principles | 3 | Derive novel conclusion from axioms + verified findings; not findable by search. Requires ≥5 verified findings in domain |
+| design-space | 4 | Map solution space from constraints; ≥2 viable approaches need systematic comparison. Requires ≥5 verified findings in domain |
 
 ## Expert Convergence
 - **answered** - resolved with well-evidenced findings
@@ -40,6 +45,7 @@
 - **narrowed** - partial progress. Re-dispatch MUST include prior handoff findings
 - **exhausted** - diminishing returns, not empty output by definition. Integration MUST preserve any findings, create a `[DERIVED: exhaustive-search]` finding, and pivot the next dispatch toward synthesis, kill-check, or a reformulated question
 - **crashed** - infrastructure failure, not exhaustion. Integrate partial findings before any re-dispatch
+- For first-principles/design-space: "narrowed" with a new empirical-gate question is a SUCCESSFUL outcome — identified what data is needed
 - **empirical-gate** - question requires physical measurement or bench testing that literature cannot resolve. Flag for human action instead of repeated literature dispatches
 
 ## Expert Pacing

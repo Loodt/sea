@@ -254,7 +254,8 @@ export async function runConductorIteration(
 
   // Update expert library with dispatch results
   // Landscape dispatches produce questions, not findings — count both as IG
-  const effectiveIG = selection.questionType === "landscape"
+  // Landscape and reasoning dispatches produce questions as key output — count both as IG
+  const effectiveIG = (selection.questionType === "landscape" || selection.questionType === "first-principles" || selection.questionType === "design-space")
     ? delta.findingsAdded + delta.questionsAdded
     : delta.findingsAdded;
   const pHash = hashPersona(expertConfig.persona);
@@ -502,7 +503,7 @@ function parseQuestionSelection(output: string): QuestionSelection | null {
   return null;
 }
 
-const VALID_QUESTION_TYPES = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis"] as const;
+const VALID_QUESTION_TYPES = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis", "first-principles", "design-space"] as const;
 
 function buildSelection(parsed: Record<string, unknown>): QuestionSelection {
   const qt = typeof parsed.questionType === "string" &&

@@ -274,12 +274,35 @@ export async function graduateFindings(
     );
 
     for (const f of findings) {
+      // SOURCE graduation: confidence >= 0.85, has URL, aged, not refuted
       if (
         f.status === "provisional" &&
         f.confidence >= 0.85 &&
         f.tag === "SOURCE" &&
         f.source &&
         f.source !== "null" &&
+        (currentIteration - f.iteration) >= staleAfter &&
+        !refutedClaims.has(f.id)
+      ) {
+        f.status = "verified";
+        f.verifiedAt = currentIteration;
+        graduated++;
+      }
+
+      // DERIVED graduation (first-principles reasoning): stricter criteria.
+      // Requires: confidence >= 0.90, derivationChain present with ≥2 premises,
+      // all finding-ID premises must themselves be verified (trust cascade).
+      if (
+        f.status === "provisional" &&
+        f.tag === "DERIVED" &&
+        f.confidence >= 0.90 &&
+        f.derivationChain &&
+        f.derivationChain.premises.length >= 2 &&
+        f.derivationChain.premises.every((premiseId) => {
+          if (!premiseId.startsWith("F")) return true; // axiom string, not finding ID
+          const premise = findings.find((p) => p.id === premiseId);
+          return premise && premise.status === "verified";
+        }) &&
         (currentIteration - f.iteration) >= staleAfter &&
         !refutedClaims.has(f.id)
       ) {

@@ -70,6 +70,42 @@ Terminal
         '-- repeat, auto-rollback on regression
 ```
 
+### First-principles reasoning
+
+When a project's knowledge store is mature (≥5 verified findings in a domain), the conductor can dispatch **reasoning experts** instead of research experts. These derive novel conclusions from existing findings rather than searching the web.
+
+Two reasoning question types:
+
+| Type | What it does | Iter cap | Search budget |
+|------|-------------|----------|---------------|
+| `first-principles` | Derive from axioms + verified findings (cost models, mechanism predictions, feasibility calculations) | 3 | 1 (validation only) |
+| `design-space` | Map solution space from constraints, generate ≥3 approaches with trade-off analysis | 4 | 2 (validation only) |
+
+Reasoning experts produce `[DERIVED]` findings with a **derivation chain** — machine-readable premises, method, assumptions, and uncertainty notes:
+
+```json
+{
+  "claim": "Binder cost R455/t at Mpumalanga plant",
+  "tag": "DERIVED",
+  "source": null,
+  "derivationChain": {
+    "premises": ["F255: mix ratio", "F260: transport cost", "F166: FA source"],
+    "method": "estimation",
+    "assumptions": ["R1.00/t-km road transport", "FA grinding R150/t"],
+    "uncertaintyNote": "Grinding cost uncertain (R100-250/t range)"
+  }
+}
+```
+
+**Guard rails against hallucination-as-reasoning:**
+- Every conclusion must trace to stated premises (derivation chain integrity)
+- DERIVED findings only graduate to verified when *all* premises are themselves verified (trust cascade)
+- Confidence threshold is stricter: 0.90 vs 0.85 for SOURCE findings
+- Low iteration caps prevent runaway speculation (3 iterations max)
+- Store prerequisites ensure reasoning starts from solid empirical ground
+
+The conductor dispatches reasoning experts automatically when it detects questions that need derivation rather than lookup — or you can tag a question with `questionType: "first-principles"` directly.
+
 ### Two-speed evolution
 
 | Layer | File | Evolves | Purpose |
@@ -250,9 +286,11 @@ sea/
 
 Every finding carries a lifecycle and epistemic tag:
 
-- **Tags:** `[SOURCE]` (URL-backed), `[DERIVED]` (computed), `[ESTIMATED]` (judgment), `[ASSUMED]` (untrusted), `[UNKNOWN]` (honest gap)
-- **Lifecycle:** provisional → verified (auto after 3 iters if confidence ≥ 0.85 + SOURCE with URL) or refuted/superseded
-- **Questions:** open → resolved (by finding ID) or deferred
+- **Tags:** `[SOURCE]` (URL-backed), `[DERIVED]` (computed/reasoned), `[ESTIMATED]` (judgment), `[ASSUMED]` (untrusted), `[UNKNOWN]` (honest gap)
+- **Lifecycle:** provisional → verified or refuted/superseded
+  - SOURCE graduation: confidence ≥ 0.85, URL present, age ≥ 3 dispatches, not contradicted
+  - DERIVED graduation: confidence ≥ 0.90, derivation chain present with ≥ 2 verified premises, age ≥ 3 dispatches (trust cascade)
+- **Questions:** open → resolved (by finding ID), deferred, or empirical-gate (needs physical measurement)
 
 ### Scoring rubrics
 
@@ -266,6 +304,8 @@ Pipeline iterations are scored on five dimensions (1-10):
 | Insight Quality | 0.20 | Novel connections, depth, actionability |
 | Process Compliance | 0.20 | Artifacts, epistemic tags, references |
 
+For reasoning types (first-principles, design-space), Insight Quality increases to 0.30 and Coverage drops to 0.10 — depth of derivation matters more than breadth.
+
 If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the previous version.
 
 ### Design principles
@@ -274,7 +314,8 @@ If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the
 - **Persona is strategy.** 80% of research quality comes from expert persona fit. The creation framework is the core investment.
 - **Exhaustion is knowledge.** When a question exhausts, the negative result becomes a structured finding documenting what was searched.
 - **Structure over rules.** Constraints are architectural (iteration caps, separate scoring model, staged workflow) not instructional.
-- **Kill fast, invest slow.** Question types have iteration caps (synthesis: 2, others: 5) to prevent wasted iterations.
+- **Kill fast, invest slow.** Question types have iteration caps (synthesis: 2, first-principles: 3, design-space: 4, others: 5) to prevent wasted iterations.
+- **Think, don't just search.** When the knowledge store is rich enough, reasoning experts derive novel conclusions from verified findings instead of dispatching more web searchers.
 - **Learn bidirectionally.** Both failure patterns AND success patterns feed into expert creation.
 - **Knowledge compounds.** Verified findings promote to a global wiki that seeds new projects.
 
@@ -347,9 +388,10 @@ Or read files directly:
 - [x] **Wave 6**: Two-loop conductor/expert architecture
 - [x] **Wave 7**: Cross-model evaluate, structured spans, success patterns, novelty pressure, expert library
 - [x] **Wave 8**: Engineering wiki (per-project Obsidian-compatible), global wiki (cross-project promotion), audit command, convergence detection
-- [ ] **Wave 9**: Skills repository (cross-project reusable patterns)
-- [ ] **Wave 10**: Bilevel code injection (runtime tool generation)
-- [ ] **Wave 11**: Context efficiency (trace summarization, skill filtering)
+- [x] **Wave 9**: First-principles reasoning (derivation chains, trust cascade graduation, reasoning-mode expert prompts, design-space analysis)
+- [ ] **Wave 10**: Skills repository (cross-project reusable patterns)
+- [ ] **Wave 11**: Bilevel code injection (runtime tool generation)
+- [ ] **Wave 12**: Context efficiency (trace summarization, skill filtering)
 
 ## Research foundation
 
