@@ -162,26 +162,63 @@ export async function assembleQuestionSelectionPrompt(
   const exhaustedCount = exhaustedQuestionIds.length;
   const pruningMode = openCount > 15 || (resolvedCount > 0 && openCount / resolvedCount > 2);
 
-  // Compute verified findings per domain for reasoning-type prerequisite checks
+  // Compute verified + SOURCE-tagged findings per domain for reasoning-type prerequisite checks
   const verifiedByDomain: Record<string, number> = {};
+  const sourceByDomain: Record<string, number> = {};
   for (const f of findings) {
     if (f.status === "verified") {
       verifiedByDomain[f.domain] = (verifiedByDomain[f.domain] || 0) + 1;
+    } else if (f.status === "provisional" && f.tag?.startsWith("SOURCE")) {
+      sourceByDomain[f.domain] = (sourceByDomain[f.domain] || 0) + 1;
     }
   }
-  const domainMaturityText = Object.entries(verifiedByDomain).length > 0
-    ? Object.entries(verifiedByDomain)
-        .sort(([, a], [, b]) => b - a)
-        .map(([d, c]) => `${d}: ${c} verified`)
+  const allDomains = new Set([...Object.keys(verifiedByDomain), ...Object.keys(sourceByDomain)]);
+  const domainMaturityText = allDomains.size > 0
+    ? [...allDomains]
+        .sort((a, b) => (verifiedByDomain[b] || 0) - (verifiedByDomain[a] || 0))
+        .map((d) => {
+          const v = verifiedByDomain[d] || 0;
+          const s = sourceByDomain[d] || 0;
+          return v > 0 ? `${d}: ${v} verified` : `${d}: ${s} SOURCE-tagged`;
+        })
         .join(", ")
     : "none";
 
+  // Dispatch-type history for type diversity enforcement
+  const metricsRaw = await safeRead(path.join(projectDir, "metrics", "conductor-metrics.jsonl"));
+  const typeCounts: Record<string, number> = {};
+  if (metricsRaw.trim()) {
+    for (const line of metricsRaw.trim().split("\n")) {
+      try { const m = JSON.parse(line); if (m.questionType) typeCounts[m.questionType] = (typeCounts[m.questionType] || 0) + 1; } catch { /* skip */ }
+    }
+  }
+  const typeHistoryText = Object.keys(typeCounts).length > 0
+    ? `Dispatches by type: ${Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(", ")}`
+    : "";
+  const verifiedCount = findings.filter((f) => f.status === "verified").length;
+  const sourceTaggedCount = findings.filter((f) => f.status === "provisional" && f.tag?.startsWith("SOURCE")).length;
+  const reasoningEligible = verifiedCount >= 5 || (verifiedCount < 5 && sourceTaggedCount >= 20);
+  const diversityWarnings: string[] = [];
+  if (conductorIteration > 6 && reasoningEligible && !typeCounts["first-principles"])
+    diversityWarnings.push("⚠ TYPE DIVERSITY: first-principles required (iter >6, 0 dispatched)");
+  if (conductorIteration > 5 && (verifiedCount >= 5 || sourceTaggedCount >= 20) && !typeCounts["design-space"])
+    diversityWarnings.push("⚠ TYPE DIVERSITY: design-space required (iter >5, 0 dispatched)");
+  // Auto-generate design-space when enough mechanism/data-hunt resolved
+  const mechDataResolved = (typeCounts["mechanism"] || 0) + (typeCounts["data-hunt"] || 0);
+  if (conductorIteration >= 5 && mechDataResolved >= 3 && !typeCounts["design-space"])
+    diversityWarnings.push("⚠ DESIGN-SPACE: ≥3 mechanism/data-hunt resolved — generate design-space question if none exists");
+  if ((typeCounts["data-hunt"] || 0) >= 5 && !((typeCounts["first-principles"] || 0) + (typeCounts["design-space"] || 0)))
+    diversityWarnings.push("⚠ TYPE DIVERSITY: data-hunt at 5× cap — dispatch reasoning type next");
+  const diversityText = diversityWarnings.join("\n");
+
   const statsText = [
-    `Total findings: ${findings.length} (${findings.filter((f) => f.status === "verified").length} verified)`,
+    `Total findings: ${findings.length} (${verifiedCount} verified, ${sourceTaggedCount} SOURCE-tagged provisional)`,
     `Verified by domain: ${domainMaturityText}`,
     `Open questions: ${openCount} | Resolved: ${resolvedCount} | Exhausted: ${exhaustedCount}`,
     `Open:Resolved ratio: ${resolvedCount > 0 ? (openCount / resolvedCount).toFixed(1) : "∞"}:1`,
     `Conductor iteration: ${conductorIteration}`,
+    typeHistoryText,
+    diversityText,
     pruningMode ? `\n⚠ PRUNING MODE ACTIVE (${openCount} open questions exceeds threshold). Prioritize kill-check and synthesis questions to narrow the frontier below 15 open. Deprioritize mechanism questions. Before dispatching landscape questions, check if existing open questions overlap.` : "",
   ].filter(Boolean).join("\n");
 
@@ -221,8 +258,8 @@ Then select the first one.` : ""}
    - **data-hunt** — specific data retrieval
    - **mechanism** — causal how/why
    - **synthesis** — combine existing findings
-   - **first-principles** — derive novel conclusions from axioms + verified findings. USE WHEN: question requires conclusion not findable by search, OR ≥2 data-hunts exhausted on same topic, OR question asks for a derived/calculated answer. PREREQUISITE: ≥5 verified findings in the question's domain.
-   - **design-space** — map solution options from constraints. USE WHEN: question asks to compare approaches, OR ≥3 mechanism questions resolved and next step is "which approach is best". PREREQUISITE: ≥5 verified findings in the question's domain.
+   - **first-principles** — derive novel conclusions from axioms + verified findings. USE WHEN: question requires conclusion not findable by search, OR ≥2 data-hunts exhausted on same topic, OR question asks for a derived/calculated answer. PREREQUISITE: ≥5 verified OR ≥20 SOURCE-tagged findings in the question's domain.
+   - **design-space** — map solution options from constraints. USE WHEN: question asks to compare approaches, OR ≥3 mechanism questions resolved and next step is "which approach is best". PREREQUISITE: ≥5 verified OR ≥20 SOURCE-tagged findings in the question's domain.
 3. Select exactly ONE question
 4. Output your selection as a JSON code block:
 

@@ -297,6 +297,7 @@ export async function graduateFindings(
         f.tag === "DERIVED" &&
         f.confidence >= 0.90 &&
         f.derivationChain &&
+        Array.isArray(f.derivationChain.premises) &&
         f.derivationChain.premises.length >= 2 &&
         f.derivationChain.premises.every((premiseId) => {
           if (!premiseId.startsWith("F")) return true; // axiom string, not finding ID
