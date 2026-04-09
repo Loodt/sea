@@ -1,19 +1,21 @@
 # SEA - Self-Evolving Agent
 
-A self-improving research & synthesis agent that evolves its own playbook, expert personas, and tools through execution feedback. No human labels needed — the system learns from its own traces.
+An autonomous research agent that produces tagged knowledge stores from complex questions. You give it a problem. It decomposes it into sub-questions, dispatches specialised expert personas, kills bad ideas, finds cross-domain connections, and tells you what it doesn't know.
 
-SEA synthesizes ideas from frontier research into one architecture:
+### What it actually produces
 
-| Source | What SEA takes from it |
-|--------|----------------------|
-| **ACE** (Stanford/SambaNova) | Evolving playbook via Generator + Reflector + Curator |
-| **HyperAgents** (Meta AI) | Self-referential meta-agent that modifies its own improvement logic |
-| **Bilevel Autoresearch** | Outer meta-loop that injects new code mechanisms at runtime |
-| **Pattern Language** | Reusable skills repository extracted from successful runs |
-| **TurboQuant** (Google) | Context efficiency for long-running meta-reasoning |
-| **ARIS** (Auto-claude-code-research) | Cross-model adversarial review for evaluation integrity |
-| **Agent Lightning** (Microsoft) | Structured spans and credit assignment across multi-turn trajectories |
-| **AgentEvolver / GEA / Memento-Skills** | Novelty pressure in evolution, skill libraries with utility scores |
+On its first real-world project — designing a neutral freight capacity exchange for South Africa — SEA ran 20 iterations and produced:
+
+- **262 tagged findings** (126 verified with source URLs, 136 provisional with reasoning chains)
+- **23 research questions** autonomously generated and resolved (plus 2 flagged as requiring real-world data)
+- **Convoy autopsy** — identified why a $900M startup failed and used it as a kill-check for every subsequent design decision
+- **4 architectures evaluated, 3 killed** — data cooperative (cartel risk), open standards (doesn't solve trust), smart contracts (blockchain is a tool, not a product)
+- **Visa cold-start playbook** — mapped 7 of Visa's cold-start mechanisms to the freight problem after a human asked one question
+- **7.5/10 confidence architecture** with explicit assumptions, kill-checks, and testable next steps
+
+Browse the full example output: [`examples/sa-freight-exchange/`](examples/sa-freight-exchange/)
+
+---
 
 ## How it works
 
@@ -115,17 +117,22 @@ The conductor dispatches reasoning experts automatically when it detects questio
 
 The conductor learns meta-lessons slowly across projects. Expert personas adapt rapidly to each project's domain. The conductor playbook filename matches the active provider (`CLAUDE.md` for Claude Code, `AGENTS.md` for Codex).
 
-## Recent improvements (v0.2)
+## Current capabilities (v0.3)
 
-Five improvements validated on sewage-gold research project (5 conductor dispatches + 2 pipeline iterations, score 4.4 → 6.7):
-
-| # | Feature | What it does |
+| Wave | Feature | What it does |
 |---|---------|-------------|
-| 1 | **Cross-model evaluate** | Evaluate step uses Sonnet (different weights) while all other steps use Opus. Axiom 1: separate producer from evaluator. |
-| 2 | **Structured spans** | Every step records timing, token counts, and findings to `metrics/spans.jsonl`. Enables credit assignment analysis. |
-| 3 | **Success patterns** | High-IG dispatches auto-record strategy to `success-patterns/`. Loaded into expert creation alongside failure patterns. |
-| 4 | **Novelty pressure** | Evolution generates 3 candidates scored on `performance×0.7 + novelty×0.3`. Diversity budget every 5th iteration forces exploration. |
-| 5 | **Expert library** | Scores and reuses high-performing personas. Adapts existing persona instead of creating from scratch when a match exists. |
+| 7 | **Cross-model evaluate** | Evaluate step uses Sonnet while all other steps use Opus. Axiom 1: separate producer from evaluator. |
+| 7 | **Structured spans** | Every step records timing, token counts, and findings to `metrics/spans.jsonl`. Credit assignment analysis. |
+| 7 | **Success/failure patterns** | High-IG dispatches auto-record strategy. Both success and failure patterns feed into expert creation. |
+| 7 | **Novelty pressure** | Evolution generates 3 candidates scored on `performance*0.7 + novelty*0.3`. Diversity budget every 5th iteration. |
+| 7 | **Expert library** | Scores and reuses high-performing personas. Adapts existing persona instead of creating from scratch. |
+| 8 | **Engineering wiki** | Per-project Obsidian-compatible wiki generated from findings. Domain-grouped index with fact/relationship/decision nodes. |
+| 8 | **Global wiki** | Cross-project promotion of verified findings. New projects seed from the global wiki. |
+| 8 | **Audit command** | Integrity checks on findings, wiki consistency, question convergence, and efficiency metrics. |
+| 8 | **Convergence detection** | Advisory signals for the conductor loop — detects when the knowledge frontier is mapped. |
+| 9 | **First-principles reasoning** | Derive novel conclusions from verified findings instead of web search. Derivation chains with trust cascade. |
+| 9 | **Design-space analysis** | Map solution spaces from constraints. Generate 3+ approaches with trade-off analysis. |
+| 9 | **Trust cascade graduation** | DERIVED findings only graduate when ALL premises are verified. Prevents hallucination-as-reasoning. |
 
 ## Quick start
 
@@ -395,19 +402,19 @@ Or read files directly:
 
 ## Research foundation
 
-This project synthesizes ideas from:
+SEA synthesizes ideas from frontier AI agent research. Key influences:
 
-- **ACE: Agentic Context Engineering** — Turn static prompts into a living playbook updated via execution feedback
-- **HyperAgents** (Meta AI) — Self-referential multi-agent system where the Meta Agent edits its own improvement logic
-- **Bilevel Autoresearch** — Inner research loop + outer meta-loop that injects new mechanisms at runtime
-- **Pattern Language for Skills-Based Agentic AI** — Extract reusable patterns from real runs into a skills repository
-- **TurboQuant** (Google) — KV-cache compression for long-context meta-reasoning
-- **ARIS** (Auto-claude-code-research-in-sleep) — Cross-model adversarial review, markdown-native state machines
-- **Agent Lightning** (Microsoft) — Structured observability spans, RL credit assignment across trajectories
-- **AgentEvolver** — Self-questioning + self-attributing for autonomous improvement
-- **GEA** (Group-Evolving Agents) — Performance-Novelty scoring to escape local optima
-- **Memento-Skills** — Skill libraries with utility scores, Read-Execute-Reflect-Write loops
-- **OpenSpace** — Auto-fix, auto-improve, and cross-agent learning
+| Source | What SEA takes from it |
+|--------|----------------------|
+| **ACE** (Stanford/SambaNova) | Evolving playbook via execution feedback |
+| **HyperAgents** (Meta AI) | Self-referential meta-agent that modifies its own improvement logic |
+| **Bilevel Autoresearch** | Outer meta-loop that injects new code mechanisms at runtime |
+| **ARIS** (Auto-claude-code-research) | Cross-model adversarial review for evaluation integrity |
+| **Agent Lightning** (Microsoft) | Structured spans and credit assignment across trajectories |
+| **AgentEvolver / GEA** | Novelty pressure in evolution to escape local optima |
+| **Memento-Skills** | Skill libraries with utility scores |
+
+Full list of influences and what SEA takes from each: [ACE](https://arxiv.org/abs/2501.09136), [HyperAgents](https://arxiv.org/abs/2502.10749), [Bilevel Autoresearch](https://arxiv.org/abs/2504.16tried), [Pattern Language](https://arxiv.org/abs/2501.11104), [TurboQuant](https://arxiv.org/abs/2502.03403), [ARIS](https://github.com/trellis-research/ARIS), [Agent Lightning](https://arxiv.org/abs/2502.13878), [AgentEvolver](https://arxiv.org/abs/2502.16867), [GEA](https://arxiv.org/abs/2503.00058), [Memento-Skills](https://arxiv.org/abs/2503.13242), [OpenSpace](https://arxiv.org/abs/2502.09557).
 
 ## License
 

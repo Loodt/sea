@@ -1,7 +1,7 @@
 {
   "name": "sea",
-  "version": "0.1.0",
-  "description": "Self-Evolving Agent — research & synthesis agent that improves itself",
+  "version": "0.3.0",
+  "description": "Autonomous research agent that produces tagged knowledge stores from complex questions",
   "type": "module",
   "bin": {
     "sea": "./dist/cli.js"
