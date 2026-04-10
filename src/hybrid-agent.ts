@@ -267,6 +267,18 @@ New questions: {"id": "Q0XX", "question": "...", "priority": "high|medium|low", 
 ### knowledge/summary.md
 Update with a concise (<2KB) summary of the project's current knowledge state after your research.
 
+## FOLLOW-ON QUESTIONS — CRITICAL
+After completing your research, identify 1-3 NEW questions that your findings reveal as important but unanswered. These should be specific, actionable questions that emerged from what you discovered — gaps, contradictions, implications, or deeper investigations that the project goal requires but the current question set does not cover.
+
+Write these as new open questions to knowledge/questions.jsonl. Good follow-on questions:
+- Build on findings you just produced (cite the finding ID in context)
+- Address a different aspect of the project goal than the question you just answered
+- Are specific enough to be answerable in one research dispatch
+
+Do NOT generate follow-ons that duplicate existing open or resolved questions. Check the question landscape above first.
+
+If your research genuinely closes all remaining gaps for the project goal, you may generate zero follow-ons — but this should be rare before the project has 100+ findings.
+
 ## CONVERGENCE CRITERIA
 - **answered** — question resolved with well-evidenced findings
 - **killed** — hypothesis/approach shown non-viable (equally valuable as answered)

@@ -246,9 +246,13 @@ Skip LOW feasibility questions (<30% chance answer exists in public sources — 
 Prefer data-dense domains (regulatory, published science) when information gain is similar. See CLAUDE.md for question type taxonomy and iteration caps.
 
 ${openQuestions.length === 0 ? `## No Open Questions Available
-Generate 3-5 initial research questions from the project goal (specific, ordered fundamental→detailed, tagged with priority and domain).
-Write to knowledge/questions.jsonl: {"id": "Q001", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
-Then select the first one.` : ""}
+Generate 3-5 research questions from the project goal and existing findings (specific, ordered fundamental→detailed, tagged with priority and domain).
+Write to knowledge/questions.jsonl: {"id": "Q${String(questions.length + 1).padStart(3, "0")}", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
+Then select the highest-priority one.` : ""}
+${openQuestions.length > 0 && openQuestions.length <= 2 ? `## LOW QUESTION QUEUE (${openQuestions.length} open)
+The question frontier is thin. Before selecting, generate 2-3 NEW questions that the project goal requires but are not yet in the queue. Review the resolved questions and their findings — what follow-on investigations do they reveal? What aspects of the project goal remain unaddressed?
+Write new questions to knowledge/questions.jsonl with IDs starting from Q${String(questions.length + 1).padStart(3, "0")}.
+Then select the highest-value question (new or existing) for dispatch.` : ""}
 
 ## Instructions
 1. Analyse the open questions against the selection criteria
