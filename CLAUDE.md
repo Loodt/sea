@@ -1,7 +1,7 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v032
+- Conductor version: v034
 - Inner loop: plan → research → summarize → synthesize → evaluate → evolve
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
@@ -16,20 +16,21 @@ Selection MUST reject near-duplicate open questions before creating new ones.
 **Compounding signal:** When total findings >80 OR verified >30, boost synthesis priority — but not above open questions never yet dispatched.
 **Early-exit rule:** Any question type with 0 findings by iter 2 → force early-exit evaluation.
 **Question generation cap:** Landscape dispatches create at most 5 new questions; non-landscape at most 3.
-**Yield decay:** Same type dispatched ≥3× in project AND latest yield <50% of that type's project average → deprioritize; rotate to underrepresented types. Full yield stats: `docs/dispatch-observations.md`.
-**Convergence taper:** newQuestionsCreated = 0 for 2+ consecutive dispatches AND iter ≥4 → frontier mapped. Boost synthesis/first-principles priority. If no synthesis question exists and store >50 findings, auto-generate one. If prior synthesis resolved and store grew >30 findings since, generate another.
+**Yield decay:** Same type dispatched ≥3× in project AND latest yield <50% of that type's project average → deprioritize; rotate to underrepresented types.
+**Convergence taper:** newQuestionsCreated = 0 for 2+ consecutive dispatches AND iter ≥4 → frontier mapped. Boost synthesis/first-principles. Auto-generate synthesis if none and store >50 findings; regenerate if store grew >30 since last.
 **Verification signal:** verified/total <35% after 10+ dispatches → boost kill-check and synthesis to consolidate provisionals. >10% findings untagged → flag for tag-debt cleanup.
-**Type diversity:** After iter 6, first-principles required if (≥5 verified OR ≥20 SOURCE-tagged) and never dispatched. After iter 5, design-space required if (≥5 verified OR ≥20 SOURCE-tagged) and never dispatched. Cap data-hunt at 5× before a reasoning type.
-**Design-space generation:** When ≥3 mechanism/data-hunt questions resolved AND no design-space question exists AND iter ≥5 → auto-generate design-space question from resolved findings.
+**Type diversity:** After iter 4, first-principles AND design-space each required if (≥5 verified OR ≥20 SOURCE-tagged) and never dispatched — mandatory, not advisory. Cap data-hunt at 5× before a reasoning type.
+**Synthesis consecutive cap:** Max 2 consecutive synthesis dispatches — then force rotation to non-synthesis type.
+**Design-space generation:** When ≥3 mechanism/data-hunt questions resolved AND no design-space question exists AND iter ≥4 → auto-generate design-space question from resolved findings.
 | Type | Cap | Selection guidance |
 |------|-----|-------------------|
 | landscape | 5 | Broad survey. Dispatch first to establish frontier. |
 | kill-check | 5 | Falsify hypotheses + produce findings. Prefer when >3 open pathways. |
 | data-hunt | 5 | Specific values. Highest yield. Early-exit at iter 2 if 0 findings. |
-| mechanism | 5 | How/why. Full-budget convergence normal. |
-| synthesis | 3 | Combine store findings. Dispatch when store >80 total OR >30 verified. 100% resolution (n=11). |
-| first-principles | 3 | Derive from axioms + verified findings. Requires ≥5 verified OR ≥20 SOURCE-tagged in domain. |
-| design-space | 4 | Map solution space from constraints. Requires ≥5 verified OR ≥20 SOURCE-tagged. Auto-generate at iter ≥5 when ≥3 mechanism/data-hunt resolved. |
+| mechanism | 5 | How/why. Multi-iter convergence normal. |
+| synthesis | 3 | Combine store findings. Yield scales with store size. Max 2 consecutive. |
+| first-principles | 3 | Derive from axioms + verified findings. Mandatory after iter 4. Fast convergence (1-2 iters). |
+| design-space | 4 | Map solution space from constraints. Mandatory after iter 4. Auto-generate when ≥3 mechanism/data-hunt resolved. |
 
 ## Expert Convergence
 - **answered** — resolved with well-evidenced findings
@@ -60,8 +61,9 @@ Provisional → verified when: confidence ≥ 0.85, tag = SOURCE with URL, age �
 - **Score persistence:** Evaluate writes JSON scores block. Loop parses/persists
 - **Summary size gate:** summary.md ≤2KB (code-enforced via `enforceSummarySize()`)
 - **Completion gate:** All questions resolved (0 open) → status "completed". Conductor skips completed.
-- **Verification floor:** Completed project with verified/total <30% → log LOW_VERIFICATION_COMPLETION. Not a hard block — rates are domain-dependent (22%-77% observed).
+- **Verification floor:** Completed project with verified/total <30% → log LOW_VERIFICATION_COMPLETION. Not a hard block.
 - **Lineage gate:** Evolve MUST produce lineage entry every iteration — including no-change holds. Missing lineage = silent drift.
+- **Inner yield gate:** If inner iter ≥3 and previous iteration added 0 findings, force convergence assessment.
 
 ## Hard Rules
 - Launch `sea conduct` as background task — wait for notification, do NOT poll
@@ -83,6 +85,7 @@ Provisional → verified when: confidence ≥ 0.85, tag = SOURCE with URL, age �
 - All JSONL writes use file-level locking (`file-lock.ts`)
 - Findings without epistemic tags MUST NOT be persisted — reject or tag [UNKNOWN] at write time
 - Kill signals prune entire branches — never deprioritize kill-check
+- Metric questionType MUST match question record type — no silent reclassification at dispatch
 
 ## Evolution Protocol
 Three valid outcomes:
@@ -104,9 +107,9 @@ Open gaps — requires code, not heuristic fixes.
 1. **Data-gap cascade** — exhausted(data-gap) must auto-gate dependent questions
 2. **Early-exit rule** — force evaluation when findingsAdded = 0 by iter 2
 3. **Narrowed rebinding** — inject prior handoff findings into re-dispatch
-4. **Summarize completeness** — before/after finding count, log PERSISTENCE_GAP
-5. **Verification floor** — log LOW_VERIFICATION_COMPLETION when completed project has verified/total <30%
-6. **Lineage code enforcement** — evolve step must code-write lineage entry, not rely on LLM compliance
+4. **Observability logging** — code-enforce PERSISTENCE_GAP, HOLLOW_ANSWER, and LOW_VERIFICATION_COMPLETION
+5. **Lineage code enforcement** — evolve step must code-write lineage entry, not rely on LLM compliance
+6. **Reasoning-type dispatch thresholds** — conductor-context.ts uses iter >6/>5; must sync to playbook iter 4
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
