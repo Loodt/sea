@@ -279,6 +279,44 @@ Quality-per-finding is comparable. The difference is breadth, not depth-per-topi
 
 ---
 
+---
+
+## Implementation: Conductor v035 (Hybrid Architecture)
+
+Based on these findings, the hybrid architecture was implemented in SEA on 2026-04-10.
+
+**Commit:** `Conductor v035: hybrid architecture — 2 LLM calls per iteration instead of 4+`
+
+### What changed
+- `src/hybrid-agent.ts` (new): Single research call with full context (all findings, all questions, wiki context, goal). Question-type-aware instructions (reasoning vs research). Agent writes directly to knowledge store. Parses structured report from output.
+- `src/conductor.ts`: Rewired from 4-step (select → create-persona → expert-loop → integrate) to 2-step (select → hybrid-research). Removed integrateHandoff(), recordSuccessPattern(), expert library interactions. All post-processing unchanged (dedup, graduation, wiki, metrics, convergence).
+- `src/types.ts`: Added HybridResult type, hybrid-research step type.
+- `src/cli.ts`: Updated command descriptions.
+- `CLAUDE.md`: Version bumped to v035, architecture description updated.
+
+### What was preserved
+- Conductor question selection with all strategic logic (type diversity enforcement, yield decay, convergence taper, domain maturity tracking) — this is the genuine MAS advantage identified in this experiment
+- Full epistemic tagging discipline in hybrid agent prompt
+- All knowledge store operations, finding graduation, deduplication
+- Wiki generation, global wiki, metrics, convergence detection
+- All CLAUDE.md rules still flow through conductor's selection prompt
+
+### What was eliminated
+- Persona creation LLM call (1 call/iter saved)
+- Separate integration LLM call (1 call/iter saved)
+- Expert library (persona-centric, no longer applicable)
+- expert-factory.ts and expert-loop.ts are dead code (not imported, not deleted)
+
+### Validation plan (EXP-014)
+1. Run v035 on a fresh project
+2. Compare against v034 baseline: findings/iter, domain coverage, question generation, convergence rate, total LLM calls
+3. If breadth is comparable: clean up dead code
+4. If breadth is worse: investigate whether hybrid agent needs explicit instructions to generate follow-on questions
+5. Key risk to watch: premature convergence (the single agent's failure mode from Phase 1/Phase 2) — the conductor's question selection should prevent this, but needs verification
+
+---
+
 *Phase 1 date: 2026-04-09*
 *Phase 2 date: 2026-04-10*
-*Status: Complete*
+*Implementation date: 2026-04-10*
+*Status: Experiment complete, hybrid implemented (v035), validation pending (EXP-014)*
