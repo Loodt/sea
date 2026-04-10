@@ -95,8 +95,7 @@ export function findingContentHash(finding: Finding): string {
  */
 export function buildWikiNode(finding: Finding, wikiPathMap?: Map<string, string>): string {
   const engType = finding.engineeringType ?? inferEngineeringType(finding);
-  const humanReview =
-    finding.humanReviewRequired ?? (engType === "ASSUMPTION" || engType === "HYPOTHESIS");
+  const humanReview = engType === "ASSUMPTION" || engType === "HYPOTHESIS";
 
   const fm = [
     "---",
@@ -112,21 +111,6 @@ export function buildWikiNode(finding: Finding, wikiPathMap?: Map<string, string
     `human_review_required: ${humanReview}`,
   ];
 
-  if (finding.linkedFindings?.length) {
-    fm.push(`linked_findings: [${finding.linkedFindings.map(escapeYamlValue).join(", ")}]`);
-  }
-
-  if (finding.quantitative) {
-    const q = finding.quantitative;
-    fm.push("quantitative:");
-    if (q.value !== undefined) fm.push(`  value: ${q.value}`);
-    if (q.unit) fm.push(`  unit: ${escapeYamlValue(q.unit)}`);
-    if (q.uncertainty) fm.push(`  uncertainty: ${escapeYamlValue(q.uncertainty)}`);
-    if (q.variableA) fm.push(`  variable_a: ${escapeYamlValue(q.variableA)}`);
-    if (q.variableB) fm.push(`  variable_b: ${escapeYamlValue(q.variableB)}`);
-    if (q.relationship) fm.push(`  relationship: ${q.relationship}`);
-  }
-
   fm.push("---");
 
   const body: string[] = ["", `## ${finding.claim}`, ""];
@@ -141,39 +125,11 @@ export function buildWikiNode(finding: Finding, wikiPathMap?: Map<string, string
     );
   }
 
-  if (finding.quantitative?.relationship) {
-    body.push(`**Relationship**: ${finding.quantitative.relationship}`, "");
-  }
-  if (finding.quantitative?.value !== undefined) {
-    const q = finding.quantitative;
-    const valStr = q.unit ? `${q.value} ${q.unit}` : `${q.value}`;
-    const uncStr = q.uncertainty ? ` (${q.uncertainty})` : "";
-    body.push(`**Value**: ${valStr}${uncStr}`, "");
-  }
-
   body.push(`**Source**: ${finding.source ?? "unknown"}`);
   body.push(`**Confidence**: ${(finding.confidence * 100).toFixed(0)}%`);
 
   if (humanReview) {
     body.push("", "> This node requires human review before use in design decisions.");
-  }
-
-  if (finding.linkedFindings?.length) {
-    const links = finding.linkedFindings
-      .map((id) => {
-        if (wikiPathMap) {
-          const targetPath = wikiPathMap.get(id);
-          if (targetPath) {
-            // Obsidian wikilink: path relative to vault root (wiki/), without .md extension.
-            // [[facts/F031|F031]] renders in Obsidian graph AND degrades to readable text elsewhere.
-            const vaultRel = targetPath.replace(/^wiki\//, "").replace(/\.md$/, "");
-            return `[[${vaultRel}|${id}]]`;
-          }
-        }
-        return `[[${id}]]`;
-      })
-      .join(", ");
-    body.push("", `**Related findings**: ${links}`);
   }
 
   return fm.join("\n") + "\n" + body.join("\n") + "\n";
@@ -269,8 +225,6 @@ export async function updateWiki(projectDir: string): Promise<WikiUpdateResult> 
       for (const f of allFindings) {
         if (!f.engineeringType) {
           f.engineeringType = inferEngineeringType(f);
-          f.humanReviewRequired =
-            f.engineeringType === "ASSUMPTION" || f.engineeringType === "HYPOTHESIS";
         }
       }
       return allFindings;

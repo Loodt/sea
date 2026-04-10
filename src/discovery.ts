@@ -37,17 +37,14 @@ export async function discoverProject(
   rl.close();
 
   // Create directory structure
+  // Only create directories that are actively used across projects.
+  // Lineage, experiments, reflections, persona-history, and project-level
+  // failure/success-patterns are created on-demand if code writes to them.
   const dirs = [
     "",
-    "persona-history",
     "references",
-    "references/pdfs",
-    "references/notes",
-    "experiments",
     "traces",
-    "reflections",
     "metrics",
-    "lineage",
     "output",
     "knowledge",
     "scratch",

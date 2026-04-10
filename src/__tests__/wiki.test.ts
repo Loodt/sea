@@ -222,21 +222,8 @@ describe("buildWikiNode", () => {
     expect(content).toContain('"Key finding: concentration matters"');
   });
 
-  it("includes quantitative data when present", () => {
-    const content = buildWikiNode(
-      makeFinding({
-        quantitative: {
-          value: 42.5,
-          unit: "mg/L",
-          uncertainty: "+/- 3%",
-          relationship: "inverse",
-        },
-      })
-    );
-    expect(content).toContain("value: 42.5");
-    expect(content).toContain("**Value**: 42.5 mg/L (+/- 3%)");
-    expect(content).toContain("**Relationship**: inverse");
-  });
+  // quantitative, linkedFindings, humanReviewRequired fields removed from Finding type
+  // (never populated across 9 projects). Tests for removed features deleted.
 
   it("adds refuted banner", () => {
     const content = buildWikiNode(makeFinding({ status: "refuted" }));
@@ -250,25 +237,7 @@ describe("buildWikiNode", () => {
     expect(content).toContain("**Superseded** by [F099](./F099.md)");
   });
 
-  it("includes linked findings as Obsidian wikilinks (no path map fallback)", () => {
-    const content = buildWikiNode(makeFinding({ linkedFindings: ["F002", "F003"] }));
-    expect(content).toContain("[[F002]]");
-    expect(content).toContain("[[F003]]");
-  });
-
-  it("resolves cross-folder linked findings as Obsidian wikilinks via pathMap", () => {
-    const pathMap = new Map([
-      ["F002", "wiki/relationships/F002.md"],
-      ["F003", "wiki/assumptions/F003.md"],
-    ]);
-    const content = buildWikiNode(
-      makeFinding({ engineeringType: "MEASUREMENT", linkedFindings: ["F002", "F003"] }),
-      pathMap
-    );
-    // Obsidian wikilinks relative to vault root (wiki/), no .md extension
-    expect(content).toContain("[[relationships/F002|F002]]");
-    expect(content).toContain("[[assumptions/F003|F003]]");
-  });
+  // linkedFindings tests removed — field removed from Finding type (wiki relationships serve this function).
 
   it("flags ASSUMPTION for human review", () => {
     const content = buildWikiNode(makeFinding({ engineeringType: "ASSUMPTION" }));
@@ -430,7 +399,6 @@ describe("updateWiki", () => {
     );
     const parsed = JSON.parse(content.trim().split("\n")[0]);
     expect(parsed.engineeringType).toBe("MEASUREMENT");
-    expect(parsed.humanReviewRequired).toBe(false);
   });
 
   it("adds new findings without rewriting existing", async () => {
@@ -530,8 +498,9 @@ describe("selectWikiContext", () => {
     expect(result).toBe("");
   });
 
-  it("returns wiki nodes matching question type filter", async () => {
-    // Set up findings + wiki via updateWiki
+  it("returns wiki nodes matching domain filter", async () => {
+    // All engineering types are now allowed for all question types
+    // (QUESTION_TYPE_CONTEXT_FILTER removed — was never used in practice)
     const findings = [
       makeFinding({ id: "F001", domain: "water", confidence: 0.95, engineeringType: "MEASUREMENT", claim: "pH is 7.2" }),
       makeFinding({ id: "F002", domain: "water", confidence: 0.8, engineeringType: "HYPOTHESIS", claim: "pH may cause corrosion" }),
@@ -539,10 +508,10 @@ describe("selectWikiContext", () => {
     await writeFindings(projectDir, findings);
     await updateWiki(projectDir);
 
-    // data-hunt only allows MEASUREMENT and STANDARD
+    // Both findings should appear since all engineering types are allowed
     const result = await selectWikiContext(projectDir, "data-hunt", "water");
     expect(result).toContain("pH is 7.2");
-    expect(result).not.toContain("pH may cause corrosion");
+    expect(result).toContain("pH may cause corrosion");
   });
 
   it("filters by domain", async () => {

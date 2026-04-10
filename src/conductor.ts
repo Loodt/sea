@@ -227,7 +227,7 @@ export async function runConductorLoop(
       const openQuestions = allQ.filter(
         (q) => q.status === "open"
       );
-      if (openQuestions.length === 0) {
+      if (openQuestions.length === 0 && allQ.length > 0) {
         const cState = await readConductorState(projDir);
         cState.status = "completed";
         cState.updatedAt = new Date().toISOString();

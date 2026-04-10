@@ -3,7 +3,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { readSummary, readFindings, readQuestions, findingCounts } from "./knowledge.js";
 import type { ExpertHandoff, Question, Finding, EngineeringType, Provider } from "./types.js";
-import { conductorFile, conductorFileCandidates, ENGINEERING_TYPE_PRIORITY, QUESTION_TYPE_CONTEXT_FILTER } from "./types.js";
+import { conductorFile, conductorFileCandidates, ENGINEERING_TYPE_PRIORITY } from "./types.js";
 
 const SEA_ROOT = process.cwd();
 
@@ -72,8 +72,8 @@ export async function selectWikiContext(
   }
   if (!manifest.entries || manifest.entries.length === 0) return "";
 
-  const allowedTypes = QUESTION_TYPE_CONTEXT_FILTER[questionType] ??
-    (["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION"] as EngineeringType[]);
+  // All engineering types allowed — QUESTION_TYPE_CONTEXT_FILTER was never used in practice.
+  const allowedTypes: EngineeringType[] = ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"];
 
   // Read findings to get their engineering types and domains
   const findings = await readFindings(projectDir);
