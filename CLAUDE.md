@@ -1,9 +1,9 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v034
+- Conductor version: v035
 - Inner loop: plan → research → summarize → synthesize → evaluate → evolve
-- Outer loop: select-question → create-expert → expert-loop → integrate-handoff
+- Outer loop: select-question → hybrid-research (single LLM call, replaces create-expert + expert-loop + integrate)
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
 - Pipeline step details: .claude/rules/execution.md
 - Multi-provider: `--provider` flag or `SEA_PROVIDER` env. Default: claude. Alt: codex. Config in `types.ts`.

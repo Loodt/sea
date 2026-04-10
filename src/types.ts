@@ -96,15 +96,7 @@ export const ENGINEERING_TYPE_PRIORITY: Record<EngineeringType, number> = {
   HYPOTHESIS: 5,
 };
 
-export const QUESTION_TYPE_CONTEXT_FILTER: Record<string, EngineeringType[]> = {
-  mechanism: ["MEASUREMENT", "STANDARD", "DERIVED"],
-  "kill-check": ["MEASUREMENT", "STANDARD", "DERIVED", "ASSUMPTION"],
-  synthesis: ["DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
-  "data-hunt": ["MEASUREMENT", "STANDARD"],
-  landscape: ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN", "ASSUMPTION", "HYPOTHESIS"],
-  "first-principles": ["MEASUREMENT", "STANDARD", "DERIVED"],
-  "design-space": ["MEASUREMENT", "STANDARD", "DERIVED", "DESIGN"],
-};
+// QUESTION_TYPE_CONTEXT_FILTER removed — never imported or used anywhere in codebase.
 
 export interface Finding {
   id: string;
@@ -120,23 +112,16 @@ export interface Finding {
 
   // Engineering knowledge classification (optional, backward-compatible)
   engineeringType?: EngineeringType;
-  quantitative?: {
-    value?: number;
-    unit?: string;
-    uncertainty?: string;
-    variableA?: string;
-    variableB?: string;
-    relationship?: "direct" | "inverse" | "nonlinear" | "threshold";
-    observedRange?: { a: [number, number]; b: [number, number] };
-  };
-  linkedFindings?: string[];
-  humanReviewRequired?: boolean;
+  // Structured derivation chain — required for DERIVED findings, optional otherwise
   derivationChain?: {
     premises: string[];      // Finding IDs or stated axioms
     method: string;          // "deduction" | "calculation" | "constraint-analysis" | "analogy"
     assumptions: string[];   // Explicitly stated assumptions
     uncertaintyNote?: string; // What could invalidate this
   };
+  // Removed: quantitative (never populated across 9 projects)
+  // Removed: linkedFindings (never populated; wiki relationships serve this function)
+  // Removed: humanReviewRequired (never set or checked)
 }
 
 export interface Question {
@@ -229,9 +214,11 @@ export const CONTEXT_BUDGETS: Record<StepType, number> = {
 
 export type ConductorStepType =
   | "select-question"
+  | "hybrid-research"
+  | "conductor-meta"
+  // Legacy (pre-v035 hybrid architecture)
   | "create-expert"
-  | "integrate-handoff"
-  | "conductor-meta";
+  | "integrate-handoff";
 
 export type ExpertStepType =
   | "expert-plan"
@@ -255,6 +242,22 @@ export interface ExpertHandoff {
   exhaustionReason?: ExhaustionReason;
 }
 
+/** Result from a single hybrid research call (v035+). Replaces ExpertHandoff for new pipeline. */
+export interface HybridResult {
+  questionId: string;
+  questionText: string;
+  questionType: QuestionType;
+  status: ExpertHandoff["status"];
+  findingsAddedByAgent: number;
+  questionsResolvedByAgent: string[];
+  newQuestionsCreatedByAgent: number;
+  summary: string;
+  exhaustionReason?: ExhaustionReason;
+  measuredFindingsDelta: number;
+  measuredQuestionsDelta: number;
+}
+
+/** @deprecated Use hybrid-agent.ts instead. Retained for backward compatibility. */
 export interface ExpertConfig {
   questionId: string;
   question: string;
@@ -343,9 +346,11 @@ export interface ConductorMetric {
 /** Hard limits per conductor/expert step type — chars, not tokens. */
 export const CONDUCTOR_CONTEXT_BUDGETS: Record<ConductorStepType | ExpertStepType, number> = {
   "select-question": 40_000,
+  "hybrid-research": 64_000,
+  "conductor-meta": 48_000,
+  // Legacy (pre-v035)
   "create-expert": 64_000,
   "integrate-handoff": 40_000,
-  "conductor-meta": 48_000,
   "expert-plan": 40_000,
   "expert-research": 48_000,
   "expert-synthesize": 48_000,
