@@ -9,7 +9,7 @@ import { runConductorIteration, runConductorLoop } from "./conductor.js";
 import { restoreVersion, getCurrentVersion } from "./versioner.js";
 import { readScores } from "./metrics.js";
 import type { ProjectState, LoopConfig, ConductorConfig, ConductorState, Provider } from "./types.js";
-import { DEFAULT_LOOP_CONFIG, DEFAULT_CONDUCTOR_CONFIG, PROVIDERS, padVersion, conductorFile } from "./types.js";
+import { DEFAULT_LOOP_CONFIG, DEFAULT_CONDUCTOR_CONFIG, PROVIDERS, padVersion, conductorFile, detectProvider } from "./types.js";
 
 const program = new Command();
 
@@ -17,15 +17,18 @@ program
   .name("sea")
   .description("SEA — Self-Evolving Agent")
   .version("0.1.0")
-  .option("--provider <provider>", "LLM provider: claude or codex", process.env.SEA_PROVIDER ?? "claude");
+  .option("--provider <provider>", "LLM provider: claude or codex (auto-detected from harness if omitted)");
 
 function resolveProvider(): Provider {
-  const p = program.opts().provider;
-  if (!(p in PROVIDERS)) {
-    console.error(`Unknown provider: "${p}". Valid: ${Object.keys(PROVIDERS).join(", ")}`);
-    process.exit(1);
+  const explicit = program.opts().provider;
+  if (explicit) {
+    if (!(explicit in PROVIDERS)) {
+      console.error(`Unknown provider: "${explicit}". Valid: ${Object.keys(PROVIDERS).join(", ")}`);
+      process.exit(1);
+    }
+    return explicit as Provider;
   }
-  return p as Provider;
+  return detectProvider();
 }
 
 // ── sea new <project> ──

@@ -2,6 +2,28 @@
 
 export type Provider = "claude" | "codex";
 
+/**
+ * Auto-detect which LLM harness is running this process.
+ * Checks environment variables set by each harness:
+ * - Claude Code sets CLAUDECODE=1
+ * - Codex sets CODEX_CLI=1
+ * Falls back to SEA_PROVIDER env var, then "claude" default.
+ *
+ * This ensures subagents use the same provider as the parent harness
+ * without requiring explicit --provider flags.
+ */
+export function detectProvider(): Provider {
+  // Explicit env var takes priority
+  if (process.env.SEA_PROVIDER && process.env.SEA_PROVIDER in PROVIDERS) {
+    return process.env.SEA_PROVIDER as Provider;
+  }
+  // Auto-detect from harness environment
+  if (process.env.CODEX_CLI === "1" || process.env.CODEX === "1") return "codex";
+  if (process.env.CLAUDECODE === "1") return "claude";
+  // Default
+  return "claude";
+}
+
 export interface ProviderConfig {
   binary: string;
   baseArgs: string[];

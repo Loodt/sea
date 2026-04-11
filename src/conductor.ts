@@ -205,7 +205,9 @@ export async function runConductorLoop(
   projectName: string,
   config: ConductorConfig = DEFAULT_CONDUCTOR_CONFIG
 ): Promise<void> {
+  const activeProvider = config.provider ?? "claude";
   console.log(`\n🎼 SEA Conductor v035 — Project: ${projectName}`);
+  console.log(`   Provider: ${activeProvider}`);
   console.log(`   Architecture: Conductor (select) → Hybrid Research (research + write)`);
   console.log(`   LLM calls per iteration: 2 (was 4+)`);
   console.log(`   Meta every: ${config.metaEveryN} conductor iterations`);
