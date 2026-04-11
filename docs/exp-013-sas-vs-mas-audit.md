@@ -316,7 +316,30 @@ Based on these findings, the hybrid architecture was implemented in SEA on 2026-
 
 ---
 
+### EXP-014 validation progress
+
+**First run (pre-fix):** 6 iterations, 46 findings, 6 questions, 12 LLM calls. Premature convergence confirmed — same pattern as EXP-013.
+
+**Fix applied (commit bca0bfa):** Two changes:
+1. hybrid-agent.ts: explicit FOLLOW-ON QUESTIONS section requiring 1-3 new questions per dispatch
+2. conductor-context.ts: LOW QUESTION QUEUE trigger generating 2-3 questions when <=2 open
+
+**Second run (post-fix, stopped at iteration 9):** 53 findings, 19 questions (12 open), 11 domains. Question generation fix validated — 19 questions vs 6, healthy open queue vs empty. Run handed off to complete to max 21 iterations.
+
+**Additional improvement (commit 4cb19ac):** Provider auto-detection via harness environment variables. Subagents automatically match parent harness (Claude Code or Codex).
+
+### Remaining work
+1. Complete validation run and document final metrics
+2. Delete dead code: expert-factory.ts, expert-loop.ts, assembleHandoffIntegrationPrompt()
+3. Update CLAUDE.md sections that still reference personas and expert library
+4. Consider restoring success pattern recording with a non-persona interface
+5. Consider repurposing expert library for question-type/domain -> IG tracking
+
+---
+
 *Phase 1 date: 2026-04-09*
 *Phase 2 date: 2026-04-10*
 *Implementation date: 2026-04-10*
-*Status: Experiment complete, hybrid implemented (v035), validation pending (EXP-014)*
+*Question generation fix: 2026-04-10*
+*Provider auto-detection: 2026-04-11*
+*Status: Hybrid implemented (v035), question generation fixed, validation run in progress (iter 9 of 21)*
