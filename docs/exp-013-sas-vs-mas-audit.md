@@ -337,9 +337,62 @@ Based on these findings, the hybrid architecture was implemented in SEA on 2026-
 
 ---
 
+### EXP-014 final result (clean run, 2026-04-11 to 2026-04-12)
+
+After fixing control bugs (max-stop, question ID dedup, question store wipe guard), a clean re-run completed:
+
+| Metric | v034 baseline (sa-logistics) | v035 validated (financial-advisor) |
+|---|---|---|
+| Iterations | 20 | 21 |
+| LLM calls | ~80+ | ~42 |
+| Findings | 262 | 138 |
+| Verified | 126 (48%) | 48 (35%) |
+| Questions | 23 | 18 |
+| Domains | ~30 | 7 |
+| Duplicate IDs | 0 | 0 |
+| Max-stop honored | N/A | Yes |
+
+---
+
+## Post-Validation Critical Review (2026-04-13)
+
+The v035 hybrid is functional but is NOT a strict improvement over v034. We traded depth for speed, and the tradeoff needs to be stated honestly.
+
+### What the persona system was doing that we lost
+
+The persona was not "overhead" in the way the paper defines it. The paper's Data Processing Inequality argument assumes agents are doing the same task with different context windows. SEA's persona doesn't reduce context — it **structures** context utilization. Removing it gave raw efficiency but degraded the quality of reasoning in ways that don't show up in per-call metrics.
+
+**1. Domain framing (lost):** A persona like "digital freight marketplace failure specialist, 14 years experience" with specific mental models and failure modes produces different reasoning than a generic "research agent." The hybrid agent reasons generically every dispatch. This likely explains the domain coverage drop (7 vs ~30).
+
+**2. Staged investigation (lost):** The persona's multi-stage workflow (fast-kill → deep dive → synthesis) across 1-5 inner iterations allowed iterative deepening. The hybrid agent does everything in one pass. For complex mechanism questions, one pass may be shallower.
+
+**3. Domain-specific guardrails (lost):** The persona had explicit "will NOT do" lists and "suspicious of" triggers tailored to the question domain. The hybrid agent has generic epistemic rules only.
+
+**4. Integration as validation (lost):** The separate integration step cross-checked new findings against existing ones, flagged contradictions, created exhaustion-as-finding entries, and generated follow-on questions. We re-added question generation but never replaced contradiction detection or cross-validation.
+
+### Methodological self-criticism
+
+We documented in the EXP-013 critical review that the experiment was flawed because "we changed too many variables at once." We then implemented that same flawed approach in production — removing personas, inner iterations, and integration simultaneously. We cannot attribute the quality drop to any specific change.
+
+### Honest assessment
+
+v035 is a valid architecture for fast, survey-level research. It is not a strict improvement for deep, high-quality investigation. The ~50% compute reduction is real. The quality degradation in domain coverage (4x worse) and verification rate (48% → 35%) is also real.
+
+### Recommended path forward
+
+**Option A — Iterate forward from v035:** Add back domain framing (lightweight prompt template instead of LLM-generated persona) and staged investigation (instruct the hybrid agent to do multi-phase research within one call). Measure after each addition.
+
+**Option B — Incremental from v034:** Revert to v034. Remove only the integration call (agent writes directly). Measure. Then lighter personas. Measure. Then collapse inner iterations. Measure. One variable at a time.
+
+Option A is faster. Option B is more rigorous.
+
+---
+
 *Phase 1 date: 2026-04-09*
 *Phase 2 date: 2026-04-10*
 *Implementation date: 2026-04-10*
 *Question generation fix: 2026-04-10*
-*Provider auto-detection: 2026-04-11*
-*Status: Hybrid implemented (v035), question generation fixed, validation run in progress (iter 9 of 21)*
+*Control bug fixes: 2026-04-11*
+*Clean validation: 2026-04-12*
+*Critical review: 2026-04-13*
+*Status: Functional but not a strict improvement. Decision pending on path forward.*
