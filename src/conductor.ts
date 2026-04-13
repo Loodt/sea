@@ -14,6 +14,7 @@ import {
   deduplicateFindings,
   aggregateReferences,
   normalizeQuestionIds,
+  enforceDerivationChains,
 } from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
@@ -211,6 +212,12 @@ export async function runConductorIteration(
       console.log(`   ✓ Deduplicated ${deduped} findings from knowledge store`);
     }
 
+    // Enforce [DERIVED] findings must carry derivationChain — downgrade to [ESTIMATED] if not
+    const downgraded = await enforceDerivationChains(projectDir);
+    if (downgraded > 0) {
+      console.log(`   ⚠ Downgraded ${downgraded} [DERIVED] finding(s) to [ESTIMATED]: missing derivationChain`);
+    }
+
     // Aggregate source URLs into references/links.md
     await aggregateReferences(projectDir);
 
@@ -330,17 +337,42 @@ export async function runConductorIteration(
   // Advance state
   await advanceConductorState(projectDir, handoff);
 
+  // Integration-phase attrition (task #8 curation rate — separate from findingsAdded which reports expert yield)
+  const handoffReported = handoff.findings?.length ?? 0;
+  const persistedDelta = fileDelta;
+  const attritionRate =
+    handoffReported > 0
+      ? Math.max(0, Math.min(1, (handoffReported - persistedDelta) / handoffReported))
+      : 0;
+  if (handoffReported > 0 && persistedDelta < handoffReported) {
+    console.log(`   ⚠ ATTRITION: expert reported ${handoffReported} findings, ${persistedDelta} persisted (${(attritionRate * 100).toFixed(1)}% attrition)`);
+  }
+
+  // Enforce exhaustionReason schema: exhausted status MUST carry a reason
+  let effectiveExhaustionReason = handoff.exhaustionReason;
+  if (handoff.status === "exhausted" && !effectiveExhaustionReason) {
+    console.log(`   ⚠ SCHEMA_VIOLATION: exhausted status without reason; defaulting to strategy-limit`);
+    effectiveExhaustionReason = "strategy-limit";
+  }
+
+  // Observability: EXHAUSTED_UNRESOLVED (meta-evolution rule: exhausted outcome must close its question)
+  if (handoff.status === "exhausted" && handoff.questionUpdates.length === 0) {
+    console.log(`   ⚠ EXHAUSTED_UNRESOLVED: ${selection.questionId} exhausted but integration did not close it`);
+  }
+
   // Log metric
   await appendConductorMetric(projectDir, {
     conductorIteration: cIter,
     questionId: selection.questionId,
     expertStatus: handoff.status,
     findingsAdded: delta.findingsAdded,
+    findingsPersisted: persistedDelta,
+    attritionRate,
     questionsResolved: handoff.questionUpdates.length,
     newQuestionsCreated: delta.questionsAdded,
     innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
-    ...(handoff.exhaustionReason ? { exhaustionReason: handoff.exhaustionReason } : {}),
+    ...(effectiveExhaustionReason ? { exhaustionReason: effectiveExhaustionReason } : {}),
     questionType: selection.questionType,
   });
 

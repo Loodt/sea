@@ -10,6 +10,7 @@ import {
   enforceSummarySize,
   graduateFindings,
   normalizeQuestionIds,
+  enforceDerivationChains,
 } from "../knowledge.js";
 import type { Finding, Question } from "../types.js";
 
@@ -450,5 +451,92 @@ describe("normalizeQuestionIds", () => {
 
     expect(updated.map((q) => q.id)).toEqual(["Q001", "Q002", "Q005", "Q004", "Q006"]);
     expect(new Set(updated.map((q) => q.id)).size).toBe(updated.length);
+  });
+});
+
+describe("enforceDerivationChains", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "sea-test-"));
+    await mkdir(path.join(tmpDir, "knowledge"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("downgrades DERIVED findings without a derivationChain to ESTIMATED", async () => {
+    const findings = [
+      makeFinding({
+        id: "F001",
+        tag: "DERIVED",
+        claim: "[DERIVED: synthesis] Some derived claim",
+      }),
+      makeFinding({
+        id: "F002",
+        tag: "DERIVED",
+        claim: "[DERIVED: deduction] Properly chained claim",
+        derivationChain: {
+          premises: ["F001", "axiom: X"],
+          method: "deduction",
+          assumptions: [],
+        },
+      }),
+      makeFinding({ id: "F003", tag: "SOURCE", source: "https://example.com" }),
+      makeFinding({
+        id: "F004",
+        tag: "DERIVED",
+        claim: "[DERIVED: calculation] Empty-premises chain",
+        derivationChain: {
+          premises: [],
+          method: "calculation",
+          assumptions: [],
+        },
+      }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+
+    const downgraded = await enforceDerivationChains(tmpDir);
+    expect(downgraded).toBe(2);
+
+    const content = await readFile(path.join(tmpDir, "knowledge", "findings.jsonl"), "utf-8");
+    const updated = content.trim().split("\n").map((line) => JSON.parse(line) as Finding);
+
+    expect(updated[0].tag).toBe("ESTIMATED");
+    expect(updated[0].claim).toMatch(/^\[ESTIMATED: derivationChain missing\]/);
+    expect(updated[1].tag).toBe("DERIVED"); // kept — has premises
+    expect(updated[2].tag).toBe("SOURCE");  // unaffected
+    expect(updated[3].tag).toBe("ESTIMATED"); // empty premises == missing chain
+  });
+
+  it("returns 0 when all DERIVED findings have valid chains", async () => {
+    const findings = [
+      makeFinding({
+        id: "F001",
+        tag: "DERIVED",
+        claim: "Valid claim",
+        derivationChain: {
+          premises: ["F002"],
+          method: "deduction",
+          assumptions: [],
+        },
+      }),
+      makeFinding({ id: "F002", tag: "SOURCE" }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+
+    const downgraded = await enforceDerivationChains(tmpDir);
+    expect(downgraded).toBe(0);
   });
 });

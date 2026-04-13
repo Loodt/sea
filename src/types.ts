@@ -356,7 +356,9 @@ export interface ConductorMetric {
   conductorIteration: number;
   questionId: string;
   expertStatus: ExpertHandoff["status"];
-  findingsAdded: number;
+  findingsAdded: number;            // reported by expert handoff (what the agent produced)
+  findingsPersisted?: number;       // actual store delta after integration (findingsAfter - findingsBefore)
+  attritionRate?: number;           // (findingsAdded - findingsPersisted) / findingsAdded, [0,1]
   questionsResolved: number;
   newQuestionsCreated: number;
   innerIterationsRun: number;

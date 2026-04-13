@@ -156,6 +156,34 @@ export async function normalizeQuestionIds(projectDir: string): Promise<number> 
   return changed;
 }
 
+/**
+ * Enforce CLAUDE.md rule: [DERIVED] without a structured derivationChain with ≥1 premise
+ * is knowledge debt. Downgrade such findings to [ESTIMATED] so the trust cascade stays honest.
+ * Returns the number of findings downgraded.
+ */
+export async function enforceDerivationChains(projectDir: string): Promise<number> {
+  let downgraded = 0;
+
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), (findings) => {
+    for (const f of findings) {
+      if (f.tag !== "DERIVED") continue;
+      const hasChain =
+        !!f.derivationChain &&
+        Array.isArray(f.derivationChain.premises) &&
+        f.derivationChain.premises.length >= 1;
+      if (hasChain) continue;
+
+      f.tag = "ESTIMATED";
+      // Rewrite the claim prefix if it led with [DERIVED: ...]
+      f.claim = f.claim.replace(/^\[DERIVED:[^\]]*\]\s*/i, "[ESTIMATED: derivationChain missing] ");
+      downgraded += 1;
+    }
+    return findings;
+  });
+
+  return downgraded;
+}
+
 // ── Summary ──
 
 export async function readSummary(projectDir: string): Promise<string> {
