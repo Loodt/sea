@@ -21,8 +21,8 @@ Selection MUST reject near-duplicate open questions before creating new ones.
 **Yield decay:** Same type dispatched ≥3× in project AND latest yield <50% of that type's project average → deprioritize; rotate to underrepresented types.
 **Type diversity:** After iter 4, first-principles AND design-space each required if (≥5 verified OR ≥20 SOURCE-tagged) and never dispatched — mandatory, not advisory. Cap data-hunt at 5× before a reasoning type.
 **Reasoning recurrence:** After 6+ dispatches since last reasoning type (first-principles/design-space) AND store grew >40 findings since then → boost reasoning type. Prevents type drift in long projects.
-**Data-hunt fatigue:** ≥2 data-hunt exhaustions in a project → deprioritize remaining open data-hunts; rotate to synthesis/reasoning to extract value from existing store. **Queue concentration:** >5 open data-hunts → apply fatigue rules preemptively (boost reasoning/synthesis) even without exhaustion.
-**Exhaustion cluster:** ≥2 exhausted in last 4 dispatches → next MUST be synthesis or first-principles. Data wall detected — rotate to reasoning types.
+**Data-hunt fatigue:** ≥2 LOW-YIELD (<10 findings) data-hunt exhaustions in a project → deprioritize remaining open data-hunts; rotate to synthesis/reasoning. High-yield (≥10 findings) exhaustion = frontier hit, counts toward progress not fatigue (align with exhaustion-cluster rule). **Queue concentration:** >5 open data-hunts → apply fatigue rules preemptively (boost reasoning/synthesis) even without exhaustion.
+**Exhaustion cluster:** ≥2 low-yield (<10 findings each) exhausted in last 4 dispatches → next MUST be synthesis or first-principles. Data wall detected. High-yield exhaustion (≥10 findings) = frontier hit, not wall — don't trigger rotation.
 | Type | Cap | Selection guidance |
 |------|-----|-------------------|
 | landscape | 5 | Broad survey. Dispatch first to establish frontier. |
@@ -106,7 +106,7 @@ Open gaps — requires code, not heuristic fixes.
 2. **Question creation cap enforcement** (HIGH) — Post-iter-12 cap of 1 violated 3× (iters 12/15/16 created 2/3/2). Hybrid agent ignores convergence cap. Need post-dispatch trim to cap.
 3. **SOURCE fast-track graduation** (MEDIUM) — Doc says 2 dispatches for ≥0.90 confidence SOURCE; code (knowledge.ts staleAfter) defaults to 3. Code should match doc.
 4. **Early-exit rule** (MEDIUM) — force convergence evaluation when findingsAdded = 0 by iter 2
-5. **Observability logging** (MEDIUM) — PERSISTENCE_GAP, HOLLOW_ANSWER, LOW_VERIFICATION_COMPLETION, DISPATCH_GAP
+5. **Observability logging** (MEDIUM) — PERSISTENCE_GAP, HOLLOW_ANSWER, LOW_VERIFICATION_COMPLETION, DISPATCH_GAP, EXHAUSTED_UNRESOLVED (exhausted outcome with questionsResolved=0 — question should be closed by integration).
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
