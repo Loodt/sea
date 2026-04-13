@@ -386,6 +386,28 @@ v035 is a valid architecture for fast, survey-level research. It is not a strict
 
 Option A is faster. Option B is more rigorous.
 
+### First-Principles Decomposition (2026-04-13)
+
+Broke the research pipeline into 8 cognitive tasks and mapped each to v034/v035 implementation and data outcome:
+
+| Task | v034 | v035 | Data signal | Status |
+|---|---|---|---|---|
+| Strategic planning | Conductor call | Same | Type diversity: 6→7 types | Preserved |
+| Question generation | Expert + integration | Hybrid + conductor (after fix) | Questions: 23→18 | Fixed |
+| Domain framing | Persona creation call | Generic prompt | Domains: ~30→7 | **Lost** |
+| Investigation | Expert loop (1-5 iters) | Single hybrid call | Findings/call: 3.3→3.3 | Same |
+| Epistemic tagging | Persona anti-hallucination + prompt | Generic prompt | SOURCE/DERIVED: 55/43→37/62 | Shifted |
+| Validation | Integration call | Nothing (dedup only) | Verification: 48→35% | **Lost** |
+| Synthesis | Multi-iteration deepening | Single pass | Domain coverage proxy | Degraded |
+| Convergence judgment | Handoff parsing | Report parsing | Convergence: 100→85% | Slightly worse |
+
+**Two specific capabilities need restoration:**
+
+1. **Domain framing** — restore via prompt template (question type + domain keywords from store), no LLM call. Proposed as EXP-015.
+2. **Finding validation** — restore via deterministic code (string similarity, contradiction detection), no LLM call. Proposed as EXP-016.
+
+If both succeed, v035 would deliver 2 calls/iter with v034-comparable quality — a genuine improvement.
+
 ---
 
 *Phase 1 date: 2026-04-09*
