@@ -116,6 +116,46 @@ export async function updateQuestion(
   });
 }
 
+/**
+ * Ensure question IDs are unique and sequentially usable.
+ * Keeps all questions, but reassigns later duplicate IDs to the next free Q-number.
+ * Returns the number of questions whose IDs were changed.
+ */
+export async function normalizeQuestionIds(projectDir: string): Promise<number> {
+  let changed = 0;
+
+  await atomicUpdateJsonl<Question>(questionsPath(projectDir), (questions) => {
+    const used = new Set<string>();
+    let maxNum = 0;
+
+    for (const q of questions) {
+      const match = q.id.match(/^Q(\d+)$/);
+      if (match) {
+        maxNum = Math.max(maxNum, parseInt(match[1], 10));
+      }
+    }
+
+    for (const q of questions) {
+      if (!used.has(q.id)) {
+        used.add(q.id);
+        continue;
+      }
+
+      do {
+        maxNum += 1;
+        q.id = `Q${String(maxNum).padStart(3, "0")}`;
+      } while (used.has(q.id));
+
+      used.add(q.id);
+      changed += 1;
+    }
+
+    return questions;
+  });
+
+  return changed;
+}
+
 // ── Summary ──
 
 export async function readSummary(projectDir: string): Promise<string> {

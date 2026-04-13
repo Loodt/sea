@@ -157,6 +157,10 @@ export async function assembleQuestionSelectionPrompt(
     : "";
 
   const resolvedQuestions = questions.filter((q) => q.status === "resolved");
+  const maxQuestionId = questions.reduce((max, q) => {
+    const match = q.id.match(/^Q(\d+)$/);
+    return match ? Math.max(max, parseInt(match[1], 10)) : max;
+  }, 0);
   const openCount = openQuestions.length;
   const resolvedCount = resolvedQuestions.length;
   const exhaustedCount = exhaustedQuestionIds.length;
@@ -195,14 +199,30 @@ export async function assembleQuestionSelectionPrompt(
   const typeHistoryText = Object.keys(typeCounts).length > 0
     ? `Dispatches by type: ${Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(", ")}`
     : "";
+
+  // Consecutive same-type sequence for hard cap enforcement
+  const recentDispatchTypes: string[] = [];
+  if (metricsRaw.trim()) {
+    for (const line of metricsRaw.trim().split("\n").slice(-3)) {
+      try { const m = JSON.parse(line); if (m.questionType) recentDispatchTypes.push(m.questionType); } catch { /* skip */ }
+    }
+  }
+  const lastTwoTypes = recentDispatchTypes.slice(-2);
+  const sameTypeBlock = lastTwoTypes.length === 2 && lastTwoTypes[0] === lastTwoTypes[1]
+    ? `\n🛑 SAME-TYPE CAP: Last 2 dispatches were both "${lastTwoTypes[0]}". You MUST select a DIFFERENT question type. This is a HARD constraint — selecting "${lastTwoTypes[0]}" again will waste a dispatch.`
+    : "";
+  const recentSequenceText = recentDispatchTypes.length > 0
+    ? `Recent dispatch sequence: ${recentDispatchTypes.join(" → ")}`
+    : "";
+
   const verifiedCount = findings.filter((f) => f.status === "verified").length;
   const sourceTaggedCount = findings.filter((f) => f.status === "provisional" && f.tag?.startsWith("SOURCE")).length;
   const reasoningEligible = verifiedCount >= 5 || (verifiedCount < 5 && sourceTaggedCount >= 20);
   const diversityWarnings: string[] = [];
-  if (conductorIteration > 6 && reasoningEligible && !typeCounts["first-principles"])
-    diversityWarnings.push("⚠ TYPE DIVERSITY: first-principles required (iter >6, 0 dispatched)");
-  if (conductorIteration > 5 && (verifiedCount >= 5 || sourceTaggedCount >= 20) && !typeCounts["design-space"])
-    diversityWarnings.push("⚠ TYPE DIVERSITY: design-space required (iter >5, 0 dispatched)");
+  if (conductorIteration >= 4 && reasoningEligible && !typeCounts["first-principles"])
+    diversityWarnings.push("⚠ TYPE DIVERSITY: first-principles required (iter ≥4, 0 dispatched)");
+  if (conductorIteration >= 4 && (verifiedCount >= 5 || sourceTaggedCount >= 20) && !typeCounts["design-space"])
+    diversityWarnings.push("⚠ TYPE DIVERSITY: design-space required (iter ≥4, 0 dispatched)");
   // Auto-generate design-space when enough mechanism/data-hunt resolved
   const mechDataResolved = (typeCounts["mechanism"] || 0) + (typeCounts["data-hunt"] || 0);
   if (conductorIteration >= 5 && mechDataResolved >= 3 && !typeCounts["design-space"])
@@ -218,7 +238,9 @@ export async function assembleQuestionSelectionPrompt(
     `Open:Resolved ratio: ${resolvedCount > 0 ? (openCount / resolvedCount).toFixed(1) : "∞"}:1`,
     `Conductor iteration: ${conductorIteration}`,
     typeHistoryText,
+    recentSequenceText,
     diversityText,
+    sameTypeBlock,
     pruningMode ? `\n⚠ PRUNING MODE ACTIVE (${openCount} open questions exceeds threshold). Prioritize kill-check and synthesis questions to narrow the frontier below 15 open. Deprioritize mechanism questions. Before dispatching landscape questions, check if existing open questions overlap.` : "",
   ].filter(Boolean).join("\n");
 
@@ -247,11 +269,11 @@ Prefer data-dense domains (regulatory, published science) when information gain 
 
 ${openQuestions.length === 0 ? `## No Open Questions Available
 Generate 3-5 research questions from the project goal and existing findings (specific, ordered fundamental→detailed, tagged with priority and domain).
-Write to knowledge/questions.jsonl: {"id": "Q${String(questions.length + 1).padStart(3, "0")}", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
+Write to knowledge/questions.jsonl starting at Q${String(maxQuestionId + 1).padStart(3, "0")}: {"id": "Q${String(maxQuestionId + 1).padStart(3, "0")}", "question": "...", "priority": "high", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
 Then select the highest-priority one.` : ""}
 ${openQuestions.length > 0 && openQuestions.length <= 2 ? `## LOW QUESTION QUEUE (${openQuestions.length} open)
 The question frontier is thin. Before selecting, generate 2-3 NEW questions that the project goal requires but are not yet in the queue. Review the resolved questions and their findings — what follow-on investigations do they reveal? What aspects of the project goal remain unaddressed?
-Write new questions to knowledge/questions.jsonl with IDs starting from Q${String(questions.length + 1).padStart(3, "0")}.
+Write new questions to knowledge/questions.jsonl with IDs starting from Q${String(maxQuestionId + 1).padStart(3, "0")}.
 Then select the highest-value question (new or existing) for dispatch.` : ""}
 
 ## Instructions

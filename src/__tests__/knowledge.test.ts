@@ -9,6 +9,7 @@ import {
   generateFallbackSummary,
   enforceSummarySize,
   graduateFindings,
+  normalizeQuestionIds,
 } from "../knowledge.js";
 import type { Finding, Question } from "../types.js";
 
@@ -411,5 +412,43 @@ describe("graduateFindings", () => {
 
     const count = await graduateFindings(tmpDir, 5, 3);
     expect(count).toBe(0);
+  });
+});
+
+describe("normalizeQuestionIds", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "sea-test-"));
+    await mkdir(path.join(tmpDir, "knowledge"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reassigns later duplicate IDs to the next free question IDs", async () => {
+    const questions = [
+      makeQuestion({ id: "Q001", question: "First?" }),
+      makeQuestion({ id: "Q002", question: "Second?" }),
+      makeQuestion({ id: "Q002", question: "Duplicate second?" }),
+      makeQuestion({ id: "Q004", question: "Fourth?" }),
+      makeQuestion({ id: "Q004", question: "Duplicate fourth?" }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "questions.jsonl"),
+      questions.map((q) => JSON.stringify(q)).join("\n") + "\n",
+      "utf-8"
+    );
+
+    const changed = await normalizeQuestionIds(tmpDir);
+    expect(changed).toBe(2);
+
+    const content = await readFile(path.join(tmpDir, "knowledge", "questions.jsonl"), "utf-8");
+    const updated = content.trim().split("\n").map((line) => JSON.parse(line) as Question);
+
+    expect(updated.map((q) => q.id)).toEqual(["Q001", "Q002", "Q005", "Q004", "Q006"]);
+    expect(new Set(updated.map((q) => q.id)).size).toBe(updated.length);
   });
 });

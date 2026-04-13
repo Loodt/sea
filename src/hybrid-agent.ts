@@ -78,6 +78,13 @@ function formatQuestions(questions: Question[]): string {
   return lines.join("\n");
 }
 
+function maxQuestionIdNumber(questions: Question[]): number {
+  return questions.reduce((max, q) => {
+    const match = q.id.match(/^Q(\d+)$/);
+    return match ? Math.max(max, parseInt(match[1], 10)) : max;
+  }, 0);
+}
+
 // ── Core Function ──
 
 /**
@@ -155,7 +162,15 @@ export async function runHybridResearch(
 
   // Measure actual deltas
   const findingsAfter = await readFindings(projectDir);
-  const questionsAfter = await readQuestions(projectDir);
+  let questionsAfter = await readQuestions(projectDir);
+
+  // Guard: detect question store wipe (agent overwrote entire file)
+  if (questionsBefore.length > 0 && questionsAfter.length === 0) {
+    console.log(`   ⚠ QUESTION_STORE_WIPE: ${questionsBefore.length} → 0. Restoring pre-dispatch snapshot.`);
+    const qPath = path.join(projectDir, "knowledge", "questions.jsonl");
+    await writeFile(qPath, questionsBefore.map(q => JSON.stringify(q)).join("\n") + "\n", "utf-8");
+    questionsAfter = await readQuestions(projectDir);
+  }
 
   // Parse structured report
   const report = parseHybridReport(result.stdout, selection);
@@ -183,6 +198,7 @@ function assembleHybridPrompt(
 ): string {
   const findingsContext = compressFindings(findings);
   const questionsContext = formatQuestions(questions);
+  const nextQuestionId = `Q${String(maxQuestionIdNumber(questions) + 1).padStart(3, "0")}`;
   const searchBudget = QUESTION_TYPE_SEARCH_BUDGET[selection.questionType] ?? 5;
   const isReasoningType = selection.questionType === "first-principles" || selection.questionType === "design-space";
 
@@ -262,7 +278,7 @@ Use IDs starting from F901 to avoid collision (conductor will reassign).
 
 ### knowledge/questions.jsonl (update status for resolved, append new)
 To resolve: update the question's status to "resolved" and set resolvedBy to the finding ID.
-New questions: {"id": "Q0XX", "question": "...", "priority": "high|medium|low", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
+New questions start at ${nextQuestionId}: {"id": "${nextQuestionId}", "question": "...", "priority": "high|medium|low", "context": "...", "domain": "...", "iteration": ${conductorIteration}, "status": "open", "resolvedAt": null, "resolvedBy": null}
 
 ### knowledge/summary.md
 Update with a concise (<2KB) summary of the project's current knowledge state after your research.
@@ -270,7 +286,7 @@ Update with a concise (<2KB) summary of the project's current knowledge state af
 ## FOLLOW-ON QUESTIONS — CRITICAL
 After completing your research, identify 1-3 NEW questions that your findings reveal as important but unanswered. These should be specific, actionable questions that emerged from what you discovered — gaps, contradictions, implications, or deeper investigations that the project goal requires but the current question set does not cover.
 
-Write these as new open questions to knowledge/questions.jsonl. Good follow-on questions:
+Write these as new open questions to knowledge/questions.jsonl using sequential IDs starting at ${nextQuestionId}. Good follow-on questions:
 - Build on findings you just produced (cite the finding ID in context)
 - Address a different aspect of the project goal than the question you just answered
 - Are specific enough to be answerable in one research dispatch

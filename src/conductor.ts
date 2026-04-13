@@ -1,26 +1,38 @@
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { atomicAppendJsonl } from "./file-lock.js";
 import path from "node:path";
-import { runHybridResearch } from "./hybrid-agent.js";
+import { createExpert } from "./expert-factory.js";
+import { runExpertLoop } from "./expert-loop.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
-import { readFindings, readQuestions, graduateFindings, enforceSummarySize, deduplicateFindings, aggregateReferences } from "./knowledge.js";
+import {
+  readFindings,
+  readQuestions,
+  updateQuestion,
+  graduateFindings,
+  enforceSummarySize,
+  deduplicateFindings,
+  aggregateReferences,
+  normalizeQuestionIds,
+} from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
+  assembleHandoffIntegrationPrompt,
   assembleConductorMetaPrompt,
 } from "./conductor-context.js";
 import { appendSpan } from "./metrics.js";
+import { hashPersona, upsertLibraryEntry } from "./expert-library.js";
 import type {
   ConductorState,
   ConductorConfig,
   QuestionSelection,
+  ExpertConfig,
   ExpertHandoff,
-  HybridResult,
   ConductorMetric,
   QuestionType,
 } from "./types.js";
 import { existsSync } from "node:fs";
-import { DEFAULT_CONDUCTOR_CONFIG, conductorFile, conductorFileCandidates } from "./types.js";
+import { DEFAULT_CONDUCTOR_CONFIG, QUESTION_TYPE_ITERATION_CAP, conductorFile, conductorFileCandidates } from "./types.js";
 
 import type { Provider } from "./types.js";
 
@@ -46,11 +58,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Run a single conductor iteration (v035 hybrid architecture):
+ * Run a single conductor iteration (v038 persona architecture):
  * 1. Select question (conductor LLM call — strategic exploration)
- * 2. Hybrid research (single LLM call — research + write to knowledge store)
+ * 2. Create expert persona (conductor LLM call — domain framing)
+ * 3. Run expert loop (expert LLM calls — research + finding validation)
+ * 4. Integrate handoff (conductor LLM call — merge into knowledge store)
  *
- * Based on EXP-013: conductor for exploration breadth, unified agent for per-call efficiency.
+ * Rollback from v035 hybrid after EXP-013 deployment validation showed
+ * 4× domain coverage drop and verification regression when persona was removed.
+ * Persona is structured-context utilization, not overhead.
  */
 export async function runConductorIteration(
   projectName: string,
@@ -61,7 +77,7 @@ export async function runConductorIteration(
   const cIter = state.conductorIteration;
   const cIterStr = String(cIter).padStart(3, "0");
 
-  // Clean stale entries from questionsExhausted
+  // Clean stale entries from questionsExhausted (questions resolved since exhaustion)
   if (state.questionsExhausted.length > 0) {
     const allQuestions = await readQuestions(projectDir);
     const resolvedIds = new Set(allQuestions.filter((q) => q.status === "resolved").map((q) => q.id));
@@ -78,7 +94,7 @@ export async function runConductorIteration(
   const dispatchStart = Date.now();
   const dispatchStartTime = new Date().toISOString();
 
-  // ═══ CALL 1: Question Selection (unchanged — conductor's strategic value) ═══
+  // ═══ CALL 1: Question Selection ═══
   console.log("📋 SELECT — choosing highest-value question...");
   const selectStart = Date.now();
   const selection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
@@ -93,38 +109,112 @@ export async function runConductorIteration(
     exitCode: 0, findingsProduced: 0,
   });
   console.log(`   ✓ Selected: ${selection.questionId} — ${truncateLine(selection.question, 60)}`);
-  console.log(`   Type: ${selection.questionType} | ${selection.suggestedExpertType}`);
+  console.log(`   Type: ${selection.questionType} | Expert: ${selection.suggestedExpertType}`);
 
-  // ═══ CALL 2: Hybrid Research (replaces persona creation + expert loop + integration) ═══
-  console.log(`\n🔬 RESEARCH — unified agent (select + research + write in one call)...`);
-  let result = await runHybridResearch(projectDir, selection, cIter, config);
+  // ═══ CALL 2: Create Expert (cap iterations by question type) ═══
+  const typeCap = QUESTION_TYPE_ITERATION_CAP[selection.questionType] ?? config.maxExpertIterations;
+  const effectiveMaxIter = Math.min(config.maxExpertIterations, typeCap);
+  console.log("\n🧬 CREATE — building expert persona...");
+  if (effectiveMaxIter < config.maxExpertIterations) {
+    console.log(`   Question type "${selection.questionType}" → capped at ${effectiveMaxIter} iterations`);
+  }
+  const createStart = Date.now();
+  const expertConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter, config.provider);
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-create`,
+    step: "create-expert",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(createStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - createStart,
+    promptChars: 0, outputChars: expertConfig.persona.length, promptTokensEst: 0,
+    outputTokensEst: Math.ceil(expertConfig.persona.length / 4),
+    exitCode: 0, findingsProduced: 0,
+  });
 
-  // One retry on crash with zero findings
-  if (result.status === "crashed" && result.measuredFindingsDelta === 0) {
-    console.log(`\n🔄 RETRY — crashed with no findings, retrying...`);
-    result = await runHybridResearch(projectDir, selection, cIter, config);
-    if (result.status === "crashed") {
+  // Snapshot knowledge store BEFORE expert loop (experts write directly to findings.jsonl)
+  const findingsBeforeDispatch = (await readFindings(projectDir)).length;
+  const questionsBeforeDispatch = (await readQuestions(projectDir)).length;
+
+  // ═══ CALL 3: Dispatch Expert Loop (with one retry on zero-finding crash) ═══
+  console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
+  const expertStart = Date.now();
+  let handoff = await runExpertLoop(expertConfig);
+
+  if (handoff.status === "crashed" && handoff.findings.length === 0) {
+    console.log(`\n🔄 RETRY — expert crashed with no findings, retrying with fresh persona...`);
+    const retryConfig = await createExpert(selection, projectDir, cIter, effectiveMaxIter, config.provider);
+    await writeFile(
+      path.join(retryConfig.expertDir, "persona.md"),
+      retryConfig.persona,
+      "utf-8"
+    );
+    handoff = await runExpertLoop(retryConfig);
+    if (handoff.status === "crashed") {
       console.log(`   ⚠ Retry also crashed — accepting crash result`);
     } else {
-      console.log(`   ✓ Retry succeeded: ${result.status}`);
+      console.log(`   ✓ Retry succeeded: ${handoff.status}`);
     }
   }
 
-  console.log(`   → ${result.questionId}: ${result.status} | +${result.measuredFindingsDelta} findings, +${result.measuredQuestionsDelta} questions`);
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-dispatch`,
+    step: "dispatch-expert",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(expertStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - expertStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: handoff.status === "crashed" ? 1 : 0,
+    findingsProduced: handoff.findings.length,
+    metadata: { status: handoff.status, iterationsRun: handoff.iterationsRun },
+  });
 
-  // ═══ POST-PROCESSING (bookkeeping, not reasoning — runs outside LLM calls) ═══
-
+  // Increment expert dispatch count immediately (survives integration crashes)
   await incrementExpertDispatches(projectDir);
 
-  if (result.status !== "crashed" || result.measuredFindingsDelta > 0) {
+  // ═══ CALL 4: Integrate Handoff (skip for zero-finding crashes) ═══
+  const integrateStart = Date.now();
+  if (handoff.status === "crashed" && handoff.findings.length === 0) {
+    console.log("\n📥 INTEGRATE — skipped (crash with no findings)");
+  } else {
+    console.log("\n📥 INTEGRATE — merging results into knowledge store...");
+    await integrateHandoff(projectDir, handoff, cIter, config);
+
+    // Enforce question status writes from handoff.questionUpdates in case integration
+    // missed any (defense against integration-call drift).
+    if (handoff.questionUpdates?.length > 0) {
+      const currentQuestions = await readQuestions(projectDir);
+      for (const update of handoff.questionUpdates) {
+        const q = currentQuestions.find((cq) => cq.id === update.id);
+        if (q && update.status && q.status !== update.status && update.status !== "open") {
+          console.log(`   ℹ Enforcing ${update.status} for ${update.id} (integration drift)`);
+          await updateQuestion(projectDir, update.id, {
+            status: update.status,
+            resolvedAt: cIter,
+          });
+        }
+      }
+    }
+
+    // Normalise duplicate question IDs (expert write + integration re-append can collide)
+    const questionIdsNormalized = await normalizeQuestionIds(projectDir);
+    if (questionIdsNormalized > 0) {
+      console.log(`   ✓ Reassigned ${questionIdsNormalized} duplicate question IDs`);
+    }
+
     await enforceSummarySize(projectDir);
 
+    // Deduplicate findings (expert writes directly + integration may re-append)
     const deduped = await deduplicateFindings(projectDir);
-    if (deduped > 0) console.log(`   ✓ Deduplicated ${deduped} findings`);
+    if (deduped > 0) {
+      console.log(`   ✓ Deduplicated ${deduped} findings from knowledge store`);
+    }
 
+    // Aggregate source URLs into references/links.md
     await aggregateReferences(projectDir);
 
-    // Wiki update (non-fatal)
+    // Update wiki output (non-fatal — wiki is derived, not source of truth)
     try {
       const { updateWiki } = await import("./wiki.js");
       const wikiResult = await updateWiki(projectDir);
@@ -135,17 +225,56 @@ export async function runConductorIteration(
       console.log(`   ⚠ Wiki update failed: ${(err as Error).message}`);
     }
 
-    // Global wiki (non-fatal)
+    // Update global wiki (non-fatal — derived from project knowledge store)
     try {
       const { updateGlobalWikiFromProject } = await import("./global-wiki.js");
       const globalResult = await updateGlobalWikiFromProject(projectDir, projectName);
       if (globalResult.promoted > 0 || globalResult.revoked > 0) {
-        console.log(`   ✓ Global wiki: ${globalResult.promoted} promoted, ${globalResult.revoked} revoked`);
+        console.log(`   ✓ Global wiki: ${globalResult.promoted} promoted, ${globalResult.revoked} revoked, ${globalResult.skipped} skipped`);
       }
-    } catch { /* non-fatal */ }
+    } catch (err) {
+      console.log(`   ⚠ Global wiki update failed: ${(err as Error).message}`);
+    }
+
+    // Update global expert library (non-fatal — promotes high-scoring experts cross-project)
+    try {
+      const { promoteExpertsToGlobal } = await import("./global-expert-library.js");
+      const expertResult = await promoteExpertsToGlobal(projectDir, projectName);
+      if (expertResult.promoted > 0) {
+        console.log(`   ✓ Global experts: ${expertResult.promoted} promoted`);
+      }
+    } catch (err) {
+      console.log(`   ⚠ Global expert library update failed: ${(err as Error).message}`);
+    }
   }
 
-  // Parent span
+  // Compute dispatch-level delta (captures findings written by expert + integration)
+  const findingsAfterDispatch = (await readFindings(projectDir)).length;
+  const questionsAfterDispatch = (await readQuestions(projectDir)).length;
+  const fileDelta = findingsAfterDispatch - findingsBeforeDispatch;
+  const handoffDelta = handoff.findings?.length || 0;
+  const delta = {
+    findingsAdded: Math.max(fileDelta, handoffDelta),
+    questionsAdded: questionsAfterDispatch - questionsBeforeDispatch,
+  };
+  if (fileDelta === 0 && handoffDelta > 0) {
+    console.log(`   ℹ File delta was 0 but handoff reports ${handoffDelta} findings (expert wrote directly)`);
+  }
+  if (delta.findingsAdded > 0 || delta.questionsAdded > 0) {
+    console.log(`   ✓ Dispatch delta: +${delta.findingsAdded} findings, +${delta.questionsAdded} questions`);
+  }
+  await appendSpan(projectDir, {
+    id: `conductor-${cIterStr}-integrate`,
+    step: "integrate-handoff",
+    parentId: `conductor-${cIterStr}`,
+    startTime: new Date(integrateStart).toISOString(),
+    endTime: new Date().toISOString(),
+    durationMs: Date.now() - integrateStart,
+    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+    exitCode: 0, findingsProduced: delta.findingsAdded,
+  });
+
+  // Parent span for entire conductor iteration
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}`,
     step: "conductor-iteration",
@@ -153,27 +282,47 @@ export async function runConductorIteration(
     endTime: new Date().toISOString(),
     durationMs: Date.now() - dispatchStart,
     promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
-    exitCode: result.status === "crashed" ? 1 : 0,
-    findingsProduced: result.measuredFindingsDelta,
-    metadata: { questionId: selection.questionId, status: result.status },
+    exitCode: handoff.status === "crashed" ? 1 : 0,
+    findingsProduced: delta.findingsAdded,
+    metadata: { questionId: selection.questionId, status: handoff.status },
   });
 
-  // Auto-graduate
-  const graduated = await graduateFindings(projectDir, cIter);
-  if (graduated > 0) console.log(`   ✓ Auto-graduated ${graduated} findings to verified`);
+  // Update expert library with dispatch results
+  // Landscape and reasoning dispatches produce questions as key output — count both as IG
+  const effectiveIG = (selection.questionType === "landscape" || selection.questionType === "first-principles" || selection.questionType === "design-space")
+    ? delta.findingsAdded + delta.questionsAdded
+    : delta.findingsAdded;
+  const pHash = hashPersona(expertConfig.persona);
+  const personaRelPath = path.relative(projectDir, path.join(expertConfig.expertDir, "persona.md"));
+  await upsertLibraryEntry(
+    projectDir,
+    pHash,
+    selection.questionType,
+    selection.question.slice(0, 100),
+    selection.suggestedExpertType,
+    effectiveIG,
+    personaRelPath,
+    expertConfig.adaptedFromHash
+  );
 
-  // Build ExpertHandoff for backward compatibility (state advancement, metrics, story)
-  const handoff: ExpertHandoff = {
-    questionId: result.questionId,
-    status: result.status,
-    findings: [],
-    questionUpdates: result.questionsResolvedByAgent.map((id) => ({ id, status: "resolved" as const })),
-    newQuestions: [],
-    summary: result.summary,
-    iterationsRun: 1,
-    convergenceAchieved: result.status === "answered" || result.status === "killed",
-    exhaustionReason: result.exhaustionReason as ExpertHandoff["exhaustionReason"],
-  };
+  // Record success pattern for high-IG dispatches (type-aware thresholds)
+  const SUCCESS_PATTERN_THRESHOLD = 5;
+  const LANDSCAPE_QUESTION_THRESHOLD = 3;
+  const isSuccessfulDispatch =
+    handoff.status === "answered" && delta.findingsAdded >= SUCCESS_PATTERN_THRESHOLD;
+  const isSuccessfulLandscape =
+    selection.questionType === "landscape" &&
+    (handoff.status === "answered" || handoff.status === "narrowed") &&
+    delta.questionsAdded >= LANDSCAPE_QUESTION_THRESHOLD;
+  if (isSuccessfulDispatch || isSuccessfulLandscape) {
+    await recordSuccessPattern(selection, expertConfig, handoff, delta, cIter);
+  }
+
+  // Auto-graduate provisional findings
+  const graduated = await graduateFindings(projectDir, cIter);
+  if (graduated > 0) {
+    console.log(`   ✓ Auto-graduated ${graduated} provisional findings to verified`);
+  }
 
   // Print story
   await printConductorStory(projectDir, cIter, selection, handoff);
@@ -185,13 +334,13 @@ export async function runConductorIteration(
   await appendConductorMetric(projectDir, {
     conductorIteration: cIter,
     questionId: selection.questionId,
-    expertStatus: result.status,
-    findingsAdded: result.measuredFindingsDelta,
-    questionsResolved: result.questionsResolvedByAgent.length,
-    newQuestionsCreated: result.measuredQuestionsDelta,
-    innerIterationsRun: 1,
+    expertStatus: handoff.status,
+    findingsAdded: delta.findingsAdded,
+    questionsResolved: handoff.questionUpdates.length,
+    newQuestionsCreated: delta.questionsAdded,
+    innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
-    ...(result.exhaustionReason ? { exhaustionReason: result.exhaustionReason as ConductorMetric["exhaustionReason"] } : {}),
+    ...(handoff.exhaustionReason ? { exhaustionReason: handoff.exhaustionReason } : {}),
     questionType: selection.questionType,
   });
 
@@ -206,10 +355,10 @@ export async function runConductorLoop(
   config: ConductorConfig = DEFAULT_CONDUCTOR_CONFIG
 ): Promise<void> {
   const activeProvider = config.provider ?? "claude";
-  console.log(`\n🎼 SEA Conductor v035 — Project: ${projectName}`);
+  console.log(`\n🎼 SEA Conductor v038 — Project: ${projectName}`);
   console.log(`   Provider: ${activeProvider}`);
-  console.log(`   Architecture: Conductor (select) → Hybrid Research (research + write)`);
-  console.log(`   LLM calls per iteration: 2 (was 4+)`);
+  console.log(`   Architecture: Conductor (select → create → dispatch → integrate)`);
+  console.log(`   Max expert iterations: ${config.maxExpertIterations}`);
   console.log(`   Meta every: ${config.metaEveryN} conductor iterations`);
   console.log(`   Cooldown: ${config.cooldownMs / 1000}s`);
   console.log(`   Press Ctrl+C to stop gracefully\n`);
@@ -220,21 +369,27 @@ export async function runConductorLoop(
   });
 
   let totalIterations = 0;
+  const projectDir = path.join(SEA_ROOT, "projects", projectName);
 
-  while (!stopping && totalIterations < config.maxConductorIterations) {
-    // Completion gate: stop if no open questions remain
-    {
-      const projDir = path.join(SEA_ROOT, "projects", projectName);
-      const allQ = await readQuestions(projDir);
-      const openQuestions = allQ.filter(
-        (q) => q.status === "open"
+  while (!stopping) {
+    const loopState = await readConductorState(projectDir);
+    if (loopState.conductorIteration > config.maxConductorIterations) {
+      console.log(
+        `\n🛑 Max conductor iteration reached (${config.maxConductorIterations}).`
       );
+      break;
+    }
+
+    // Completion gate: stop if no open questions remain (fresh project guard: only if any exist)
+    {
+      const allQ = await readQuestions(projectDir);
+      const openQuestions = allQ.filter((q) => q.status === "open");
       if (openQuestions.length === 0 && allQ.length > 0) {
-        const cState = await readConductorState(projDir);
+        const cState = await readConductorState(projectDir);
         cState.status = "completed";
         cState.updatedAt = new Date().toISOString();
         await writeFile(
-          path.join(projDir, "state.json"),
+          path.join(projectDir, "state.json"),
           JSON.stringify(cState, null, 2),
           "utf-8"
         );
@@ -249,9 +404,7 @@ export async function runConductorLoop(
     totalIterations++;
 
     // Meta-evolution check
-    const state = await readConductorState(
-      path.join(SEA_ROOT, "projects", projectName)
-    );
+    const state = await readConductorState(projectDir);
 
     if (state.conductorIteration % config.metaEveryN === 0) {
       console.log("\n🧠 META — evolving conductor...");
@@ -260,14 +413,14 @@ export async function runConductorLoop(
         path.join(SEA_ROOT, "conductor-history")
       );
       const metaPrompt = await assembleConductorMetaPrompt(
-        path.join(SEA_ROOT, "projects", projectName),
+        projectDir,
         state.conductorIteration,
         config.provider
       );
       await runAndTrace(
         metaPrompt,
         SEA_ROOT,
-        path.join(SEA_ROOT, "projects", projectName, "traces"),
+        path.join(projectDir, "traces"),
         `conductor-${String(state.conductorIteration).padStart(3, "0")}-meta`,
         config.provider ? { provider: config.provider } : undefined
       );
@@ -278,11 +431,10 @@ export async function runConductorLoop(
     try {
       const { readConductorMetrics, detectConvergenceSignals } = await import("./metrics.js");
       const { readFindings: readF, readQuestions: readQ } = await import("./knowledge.js");
-      const projDir = path.join(SEA_ROOT, "projects", projectName);
       const [cMetrics, cFindings, cQuestions] = await Promise.all([
-        readConductorMetrics(projDir),
-        readF(projDir),
-        readQ(projDir),
+        readConductorMetrics(projectDir),
+        readF(projectDir),
+        readQ(projectDir),
       ]);
       const convergence = detectConvergenceSignals(cFindings, cQuestions, cMetrics);
       if (convergence.isConverging) {
@@ -292,7 +444,7 @@ export async function runConductorLoop(
         }
         if (convergence.recommendation === "stop") {
           // Write convergence report
-          const reportDir = path.join(projDir, "output");
+          const reportDir = path.join(projectDir, "output");
           await mkdir(reportDir, { recursive: true });
           const report = [
             "# Convergence Report",
@@ -317,7 +469,11 @@ export async function runConductorLoop(
       // Convergence check is advisory — never block the loop
     }
 
-    if (!stopping && totalIterations < config.maxConductorIterations) {
+    if (!stopping) {
+      const nextState = await readConductorState(projectDir);
+      if (nextState.conductorIteration > config.maxConductorIterations) {
+        continue;
+      }
       console.log(`\n⏱  Cooling down ${config.cooldownMs / 1000}s...`);
       await sleep(config.cooldownMs);
     }
@@ -408,6 +564,32 @@ function buildSelection(parsed: Record<string, unknown>): QuestionSelection {
     estimatedIterations: (parsed.estimatedIterations as number) ?? 3,
     questionType: qt,
   };
+}
+
+// ── Handoff Integration ──
+
+async function integrateHandoff(
+  projectDir: string,
+  handoff: ExpertHandoff,
+  conductorIteration: number,
+  config?: ConductorConfig
+): Promise<void> {
+  const prompt = await assembleHandoffIntegrationPrompt(projectDir, handoff);
+  const iterStr = String(conductorIteration).padStart(3, "0");
+
+  const result = await runAndTrace(
+    prompt,
+    projectDir,
+    path.join(projectDir, "traces"),
+    `conductor-${iterStr}-integrate`,
+    config?.provider ? { provider: config.provider } : undefined
+  );
+
+  if (result.exitCode !== 0) {
+    console.log(`   ⚠ Integration exited with code ${result.exitCode}`);
+  } else {
+    console.log(`   ✓ Integration complete`);
+  }
 }
 
 // ── State Management ──
@@ -591,6 +773,47 @@ async function safeReadFile(filePath: string): Promise<string> {
   } catch {
     return "";
   }
+}
+
+// ── Success Patterns ──
+
+async function recordSuccessPattern(
+  selection: QuestionSelection,
+  expertConfig: ExpertConfig,
+  handoff: ExpertHandoff,
+  delta: { findingsAdded: number; questionsAdded: number },
+  conductorIteration: number
+): Promise<void> {
+  const patternDir = path.join(SEA_ROOT, "success-patterns");
+  await mkdir(patternDir, { recursive: true });
+
+  const slug = selection.suggestedExpertType.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const fileName = `${selection.questionType}-${slug}-d${String(conductorIteration).padStart(2, "0")}.md`;
+
+  const content = [
+    `# Success Pattern: ${selection.questionType} — ${selection.suggestedExpertType}`,
+    ``,
+    `## Strategy`,
+    `Expert type "${selection.suggestedExpertType}" for ${selection.questionType} question.`,
+    `Question: ${selection.question}`,
+    ``,
+    `## When It Works`,
+    `- Question type: ${selection.questionType}`,
+    `- Converged in ${handoff.iterationsRun}/${expertConfig.maxIterations} iterations`,
+    ``,
+    `## Evidence`,
+    `- Dispatch: D${conductorIteration}`,
+    `- Question: ${selection.questionId}`,
+    `- Findings produced: ${delta.findingsAdded}`,
+    `- Iterations: ${handoff.iterationsRun}/${expertConfig.maxIterations}`,
+    `- Status: ${handoff.status}`,
+    ``,
+    `## Key Decisions`,
+    handoff.summary || "(no summary)",
+  ].join("\n");
+
+  await writeFile(path.join(patternDir, fileName), content, "utf-8");
+  console.log(`   ✓ Success pattern recorded: ${fileName}`);
 }
 
 // ── Helpers ──

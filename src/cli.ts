@@ -76,7 +76,7 @@ program
 // ── sea conduct <project> ──
 program
   .command("conduct <project>")
-  .description("Hybrid conductor: select question → unified research agent (2 LLM calls per iteration)")
+  .description("Two-loop conductor: select question → create persona → dispatch expert → integrate")
   .option("-c, --cooldown <seconds>", "Cooldown between conductor iterations", "30")
   .option("-m, --max <iterations>", "Maximum conductor iterations", "Infinity")
   .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
@@ -99,7 +99,7 @@ program
 // ── sea dispatch <project> ──
 program
   .command("dispatch <project>")
-  .description("Run a single conductor iteration (select question → hybrid research)")
+  .description("Run a single conductor iteration (select question, create expert, dispatch, integrate)")
   .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
   .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
   .action(async (project: string, opts) => {
