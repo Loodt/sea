@@ -23,6 +23,11 @@ global-wiki/
 .claude/settings.local.json
 .claude/notes.md
 .claude/plans/
+.claude/scheduled_tasks.lock
+
+# Meta-evolution snapshots (iter-stamped playbook captures, parallel to CLAUDE-history/)
+AGENTS.snapshot-*.md
+AGENTS-history/
 
 # Working documents (contain project-specific data)
 SEA-CURRENT-WORKINGS.md
