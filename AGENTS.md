@@ -1,7 +1,7 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v046
+- Conductor version: v046 (jarvis-architecture iter 0-26: 27/48 answered, 1 exhausted, avg 16.4 f/dispatch; 170 findings (45 verified, 26%). 20 open — 13 design-space at 3.25× cap. Lineage writer landed dfb62af; populates from iter 27 onward.)
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff (4 LLM calls per iteration)
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
 - Multi-provider: `--provider`, `SEA_PROVIDER`, or harness auto-detect (CLAUDECODE / CODEX_CLI). Config in `types.ts`.
@@ -103,11 +103,16 @@ accuracy: 0.25 | coverage: 0.20 | coherence: 0.15 | insight: 0.20 | process: 0.2
 
 ## Infrastructure Debt
 Open gaps that require code, not heuristics:
-1. **Question creation cap enforcement** (HIGH) — late-stage caps are still prompt-level. Need post-dispatch trimming against per-iteration creation ceilings.
-2. **SOURCE fast-track graduation** (MEDIUM) — playbook says SOURCE ≥0.90 confidence graduates after 2 dispatches; `knowledge.ts` still uses the generic aging threshold.
-3. **Early-exit enforcement** (MEDIUM) — zero-finding searches at inner iter 2 still rely on prompt guidance instead of code-level convergence control.
-4. **Observability completeness** (MEDIUM) — ensure `PERSISTENCE_GAP`, `HOLLOW_ANSWER`, `LOW_VERIFICATION_COMPLETION`, `DISPATCH_GAP`, and `EXHAUSTED_UNRESOLVED` are emitted consistently, not only in partial paths.
-5. **Selector-state enforcement** (MEDIUM) — exploit-mode follow-through, closure acceleration, non-closing answer handling, mechanism debt, and thin-closure recovery still depend too much on prompt text instead of persistent branch-local state.
+1. **SOURCE fast-track graduation** (MEDIUM) — playbook says SOURCE ≥0.90 confidence graduates after 2 dispatches; `knowledge.ts` still uses the generic aging threshold.
+2. **Early-exit enforcement** (MEDIUM) — zero-finding searches at inner iter 2 still rely on prompt guidance instead of code-level convergence control.
+3. **Observability completeness** (MEDIUM) — ensure `PERSISTENCE_GAP`, `HOLLOW_ANSWER`, `LOW_VERIFICATION_COMPLETION`, `DISPATCH_GAP`, and `EXHAUSTED_UNRESOLVED` are emitted consistently, not only in partial paths.
+4. **Selector-state enforcement** (MEDIUM) — exploit-mode follow-through, closure acceleration, non-closing answer handling, mechanism debt, and thin-closure recovery still depend too much on prompt text instead of persistent branch-local state.
+
+### Closed
+- ~~**Findings store snapshot/restore**~~ — `src/store-snapshot.ts` + wired into `conductor.ts` before integrate. Auto-restore on zero-out, >50% loss, or verified removal. `STORE_CLOBBER_RESTORED` span logs full diff.
+- ~~**Question creation cap enforcement**~~ — `src/question-caps.ts` runs post-integration: per-type queue cap (block when open > dispatch cap), iter-boundary caps (12/15/18/20), per-dispatch new-question cap (landscape ≤5, other ≤3). `QUESTION_CAP_TRIMMED` span per trim.
+- ~~**Same-type cap + re-dispatch guard**~~ — `src/selection-guards.ts` runs pre-dispatch: non-open re-dispatch swap, re-dispatch type-mismatch correction (scoped to questions with prior metric only), same-type 3rd-consecutive swap. `SELECTION_GUARD_INTERVENED` span per intervention.
+- ~~**Lineage writer**~~ — `appendLineageEntry` in `conductor.ts` runs after every iteration's metric write (changeType derived from outcome: progress/no-change/exhaustion/strategic/infrastructure/narrowed) and after meta-evolution (target = playbook path). Was prompt-only and never fired in conductor architecture (no separate evolve step). Historical iters of jarvis-architecture have no lineage; future iters populate `lineage/changes.jsonl`.
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
