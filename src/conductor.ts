@@ -491,6 +491,25 @@ export async function runConductorIteration(
     questionType: selection.questionType,
   });
 
+  // Lineage gate: write an entry every iteration (including no-change holds).
+  // Deterministic in-code write — does not depend on LLM tool use.
+  const noChangeHold =
+    handoff.status === "answered" && delta.findingsAdded === 0 && delta.questionsAdded === 0;
+  const changeType =
+    handoff.status === "exhausted" ? "exhaustion" :
+    handoff.status === "killed" ? "strategic" :
+    handoff.status === "crashed" ? "infrastructure" :
+    handoff.status === "narrowed" ? "narrowed" :
+    noChangeHold ? "no-change" : "progress";
+  await appendLineageEntry(projectDir, {
+    iteration: cIter,
+    target: "iteration",
+    changeType,
+    changeSummary: `${selection.questionType} dispatch on ${selection.questionId}: ${handoff.status}, +${delta.findingsAdded}f, +${delta.questionsAdded}q`,
+    reasoning: (handoff.summary || "(no summary)").slice(0, 400),
+    scoreBefore: null,
+  });
+
   return { conductorIteration: cIter, handoff };
 }
 
@@ -572,6 +591,14 @@ export async function runConductorLoop(
         config.provider ? { provider: config.provider } : undefined
       );
       console.log("   ✓ Conductor updated");
+      await appendLineageEntry(projectDir, {
+        iteration: state.conductorIteration,
+        target: resolveConductorPath(config.provider),
+        changeType: "meta-evolution",
+        changeSummary: `meta ran at iter ${state.conductorIteration} (every ${config.metaEveryN})`,
+        reasoning: "see conductor-history snapshot for diff; trace at traces/conductor-*-meta",
+        scoreBefore: null,
+      });
     }
 
     // Convergence check (advisory — never auto-stops)
@@ -822,6 +849,36 @@ async function appendConductorMetric(
     // File doesn't exist yet — proceed to append
   }
   await atomicAppendJsonl(filePath, metric);
+}
+
+// ── Lineage ──
+// Per-iteration audit trail. Reader paths: conductor-context.ts (cross-project meta input),
+// context.ts (legacy evolve), loop.ts (legacy single-project loop). Format matches assembleEvolve's
+// prompt template at context.ts:516.
+
+interface LineageEntry {
+  iteration: number;
+  timestamp: string;
+  target: string;
+  changeType: string;
+  changeSummary: string;
+  reasoning: string;
+  scoreBefore: number | null;
+  scoreAfter: number | null;
+}
+
+async function appendLineageEntry(
+  projectDir: string,
+  entry: Omit<LineageEntry, "timestamp" | "scoreAfter"> & { scoreAfter?: number | null }
+): Promise<void> {
+  const dir = path.join(projectDir, "lineage");
+  await mkdir(dir, { recursive: true });
+  const full: LineageEntry = {
+    timestamp: new Date().toISOString(),
+    scoreAfter: null,
+    ...entry,
+  };
+  await atomicAppendJsonl(path.join(dir, "changes.jsonl"), full);
 }
 
 // ── Conductor Story ──
