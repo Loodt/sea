@@ -12,6 +12,9 @@ import {
   detectClobber,
   restoreStores,
 } from "./store-snapshot.js";
+import { applySelectionGuards } from "./selection-guards.js";
+import { applyQuestionCaps } from "./question-caps.js";
+import { readConductorMetrics } from "./metrics.js";
 import {
   readFindings,
   readQuestions,
@@ -105,7 +108,7 @@ export async function runConductorIteration(
   // ═══ CALL 1: Question Selection ═══
   console.log("📋 SELECT — choosing highest-value question...");
   const selectStart = Date.now();
-  const selection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
+  const rawSelection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}-select`,
     step: "select-question",
@@ -116,6 +119,41 @@ export async function runConductorIteration(
     promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
     exitCode: 0, findingsProduced: 0,
   });
+
+  // Pre-dispatch selection guards: non-open re-dispatch, re-dispatch type-mismatch,
+  // same-type cap. Converts prompt rules (CLAUDE.md) into code enforcement.
+  const priorMetrics = await readConductorMetrics(projectDir);
+  const recentTypes = priorMetrics
+    .slice(-3)
+    .reverse()
+    .map((m) => m.questionType)
+    .filter((t): t is QuestionType => !!t);
+  const allQuestionsForGuards = await readQuestions(projectDir);
+  const guardResult = applySelectionGuards(rawSelection, allQuestionsForGuards, recentTypes, priorMetrics);
+  const selection = guardResult.selection;
+  for (const intervention of guardResult.interventions) {
+    console.log(`   ⚠ ${intervention.rule}: ${intervention.reason}`);
+    await appendSpan(projectDir, {
+      id: `conductor-${cIterStr}-guard-${intervention.rule}`,
+      step: "select-question",
+      parentId: `conductor-${cIterStr}`,
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      durationMs: 0,
+      promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+      exitCode: 0, findingsProduced: 0,
+      metadata: {
+        event: "SELECTION_GUARD_INTERVENED",
+        rule: intervention.rule,
+        originalQuestionId: intervention.originalQuestionId,
+        originalType: intervention.originalType,
+        correctedQuestionId: intervention.correctedQuestionId,
+        correctedType: intervention.correctedType,
+        reason: intervention.reason,
+      },
+    });
+  }
+
   console.log(`   ✓ Selected: ${selection.questionId} — ${truncateLine(selection.question, 60)}`);
   console.log(`   Type: ${selection.questionType} | Expert: ${selection.suggestedExpertType}`);
 
@@ -247,6 +285,38 @@ export async function runConductorIteration(
     const questionIdsNormalized = await normalizeQuestionIds(projectDir);
     if (questionIdsNormalized > 0) {
       console.log(`   ✓ Reassigned ${questionIdsNormalized} duplicate question IDs`);
+    }
+
+    // Post-integration question-store caps: per-type queue cap, iter-boundary
+    // convergence cap, per-dispatch new-question cap. Converts CLAUDE.md
+    // prompt rules into code enforcement (infra debt #1 + #3).
+    const capActions = await applyQuestionCaps(
+      projectDir,
+      {
+        conductorIteration: cIter,
+        landscapeDispatch: selection.questionType === "landscape",
+      },
+      priorMetrics
+    );
+    for (const action of capActions) {
+      console.log(`   ⚠ ${action.rule}: ${action.reason}`);
+      await appendSpan(projectDir, {
+        id: `conductor-${cIterStr}-cap-${action.rule}`,
+        step: "integrate-handoff",
+        parentId: `conductor-${cIterStr}`,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        durationMs: 0,
+        promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+        exitCode: 0, findingsProduced: 0,
+        metadata: {
+          event: "QUESTION_CAP_TRIMMED",
+          rule: action.rule,
+          removedQuestionIds: action.removedQuestionIds,
+          effectiveCap: action.effectiveCap,
+          observedCount: action.observedCount,
+        },
+      });
     }
 
     await enforceSummarySize(projectDir);

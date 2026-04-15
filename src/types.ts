@@ -328,6 +328,28 @@ export const QUESTION_TYPE_SEARCH_BUDGET: Record<QuestionType, number> = {
   "design-space": 2,
 };
 
+/**
+ * Project-level dispatch cap per question type (mirrors CLAUDE.md table).
+ * Used by post-integration question-caps guard: when a type's open-queue
+ * count would exceed this cap after integration, new questions of that
+ * type are trimmed from this iteration's additions.
+ */
+export const QUESTION_TYPE_DISPATCH_CAP: Record<QuestionType, number> = {
+  landscape: 5,
+  "kill-check": 5,
+  "data-hunt": 5,
+  mechanism: 5,
+  synthesis: 3,
+  "first-principles": 3,
+  "design-space": 4,
+};
+
+/** Per-dispatch cap on new questions created during integration. */
+export const PER_DISPATCH_NEW_QUESTION_CAP = {
+  landscape: 5,
+  other: 3,
+} as const;
+
 export interface ConductorState extends ProjectState {
   mode: "conductor";
   conductorIteration: number;
