@@ -1,10 +1,17 @@
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { atomicAppendJsonl } from "./file-lock.js";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { createExpert } from "./expert-factory.js";
 import { runExpertLoop } from "./expert-loop.js";
 import { runAndTrace } from "./runner.js";
 import { snapshotFile } from "./versioner.js";
+import {
+  snapshotStores,
+  diffStores,
+  detectClobber,
+  restoreStores,
+} from "./store-snapshot.js";
 import {
   readFindings,
   readQuestions,
@@ -180,7 +187,45 @@ export async function runConductorIteration(
     console.log("\n📥 INTEGRATE — skipped (crash with no findings)");
   } else {
     console.log("\n📥 INTEGRATE — merging results into knowledge store...");
+
+    // Snapshot knowledge store BEFORE integration rewrite (infrastructure debt #1).
+    // Iter-18 destroyed 224 findings via integration clobber — deterministic guard.
+    const preIntegrationSnapshot = await snapshotStores(projectDir, cIter, "pre-integration");
+
     await integrateHandoff(projectDir, handoff, cIter, config);
+
+    // Diff against snapshot; auto-restore on clobber.
+    const integrationDiff = await diffStores(projectDir, preIntegrationSnapshot);
+    const clobberVerdict = detectClobber(integrationDiff);
+    if (clobberVerdict.isClobber) {
+      console.log(`   ⚠ STORE_CLOBBER detected (${clobberVerdict.severity}) — restoring pre-integration snapshot.`);
+      for (const reason of clobberVerdict.reasons) {
+        console.log(`     - ${reason}`);
+      }
+      await restoreStores(projectDir, preIntegrationSnapshot);
+      await appendSpan(projectDir, {
+        id: `conductor-${cIterStr}-clobber-restore`,
+        step: "integrate-handoff",
+        parentId: `conductor-${cIterStr}`,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        durationMs: 0,
+        promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+        exitCode: 1, findingsProduced: 0,
+        metadata: {
+          event: "STORE_CLOBBER_RESTORED",
+          severity: clobberVerdict.severity,
+          reasons: clobberVerdict.reasons,
+          diff: integrationDiff,
+          snapshotDir: preIntegrationSnapshot.dir,
+        },
+      });
+    } else if (clobberVerdict.severity === "warning") {
+      console.log(`   ⚠ Integration warning (non-blocking):`);
+      for (const reason of clobberVerdict.reasons) {
+        console.log(`     - ${reason}`);
+      }
+    }
 
     // Enforce question status writes from handoff.questionUpdates in case integration
     // missed any (defense against integration-call drift).
@@ -819,7 +864,10 @@ async function recordSuccessPattern(
   const patternDir = path.join(SEA_ROOT, "success-patterns");
   await mkdir(patternDir, { recursive: true });
 
-  const slug = selection.suggestedExpertType.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const rawSlug = selection.suggestedExpertType.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  const slug = rawSlug.length > 80
+    ? rawSlug.slice(0, 80).replace(/-+$/, "") + "-" + createHash("sha1").update(rawSlug).digest("hex").slice(0, 8)
+    : rawSlug;
   const fileName = `${selection.questionType}-${slug}-d${String(conductorIteration).padStart(2, "0")}.md`;
 
   const content = [
