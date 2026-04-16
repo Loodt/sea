@@ -25,6 +25,9 @@ global-wiki/
 .claude/plans/
 .claude/scheduled_tasks.lock
 
+# Obsidian local vault config (personal browsing setup)
+.obsidian/
+
 # Meta-evolution snapshots (iter-stamped playbook captures, parallel to CLAUDE-history/)
 AGENTS.snapshot-*.md
 AGENTS-history/
