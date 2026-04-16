@@ -8,6 +8,7 @@ import {
   findingCounts,
   generateFallbackSummary,
   enforceSummarySize,
+  enforceSummaryFreshness,
   graduateFindings,
   normalizeQuestionIds,
   enforceDerivationChains,
@@ -42,6 +43,7 @@ function makeQuestion(overrides: Partial<Question> = {}): Question {
     domain: "test",
     iteration: 1,
     status: "open",
+    questionType: "data-hunt",
     resolvedAt: null,
     resolvedBy: null,
     ...overrides,
@@ -166,62 +168,42 @@ describe("findingCounts", () => {
 // ── generateFallbackSummary ──
 
 describe("generateFallbackSummary", () => {
-  it("includes verified findings section", () => {
+  it("includes store counts", () => {
     const findings = [makeFinding({ status: "verified", claim: "Water is wet" })];
-    const summary = generateFallbackSummary(findings, []);
-    expect(summary).toContain("## Verified Findings");
-    expect(summary).toContain("Water is wet");
+    const questions = [makeQuestion({ status: "open" })];
+    const summary = generateFallbackSummary(findings, questions);
+    expect(summary).toContain("## Store");
+    expect(summary).toContain("1 findings: 1 verified, 0 provisional, 0 refuted, 0 superseded.");
+    expect(summary).toContain("1 questions: 0 resolved, 1 open, 0 exhausted.");
   });
 
-  it("includes provisional findings section", () => {
+  it("includes latest findings section", () => {
     const findings = [makeFinding({ status: "provisional", claim: "Maybe true" })];
     const summary = generateFallbackSummary(findings, []);
-    expect(summary).toContain("## Provisional (unverified)");
+    expect(summary).toContain("## Latest Findings");
     expect(summary).toContain("Maybe true");
   });
 
-  it("includes refuted findings section", () => {
-    const findings = [makeFinding({ status: "refuted", claim: "Wrong claim" })];
-    const summary = generateFallbackSummary(findings, []);
-    expect(summary).toContain("## Refuted");
-    expect(summary).toContain("~~Wrong claim~~");
-  });
-
-  it("includes open questions section", () => {
-    const questions = [makeQuestion({ priority: "high", question: "What about X?" })];
+  it("includes open branches section", () => {
+    const questions = [makeQuestion({ id: "Q007", priority: "high", question: "What about X?" })];
     const summary = generateFallbackSummary([], questions);
-    expect(summary).toContain("## Open Questions");
-    expect(summary).toContain("**[HIGH]** What about X?");
+    expect(summary).toContain("## Open Branches");
+    expect(summary).toContain("`Q007` [data-hunt] test");
   });
 
-  it("limits medium-priority questions to 5", () => {
+  it("limits open branches to 10", () => {
     const questions = Array.from({ length: 10 }, (_, i) =>
-      makeQuestion({ id: `Q${i}`, priority: "medium", question: `Q${i}?` })
+      makeQuestion({ id: `Q${i}`, priority: "medium", question: `Q${i}?`, domain: `d${i}`, questionType: "data-hunt" })
     );
     const summary = generateFallbackSummary([], questions);
-    const mediumMatches = summary.match(/\[medium\]/g);
-    expect(mediumMatches).toHaveLength(5);
-  });
-
-  it("truncates verified findings at 20", () => {
-    const findings = Array.from({ length: 25 }, (_, i) =>
-      makeFinding({ id: `F${i}`, status: "verified", claim: `Claim ${i}` })
-    );
-    const summary = generateFallbackSummary(findings, []);
-    expect(summary).toContain("... and 5 more");
-  });
-
-  it("includes footer with counts", () => {
-    const findings = [makeFinding(), makeFinding({ id: "F002" })];
-    const questions = [makeQuestion({ status: "open" })];
-    const summary = generateFallbackSummary(findings, questions);
-    expect(summary).toContain("2 findings, 1 open questions");
+    const branchMatches = summary.match(/\[data-hunt\]/g);
+    expect(branchMatches).toHaveLength(10);
   });
 
   it("handles empty inputs", () => {
     const summary = generateFallbackSummary([], []);
     expect(summary).toContain("# Knowledge Summary");
-    expect(summary).toContain("0 findings, 0 open questions");
+    expect(summary).toContain("0 findings: 0 verified, 0 provisional, 0 refuted, 0 superseded.");
   });
 });
 
@@ -269,6 +251,68 @@ describe("enforceSummarySize", () => {
     const content = await readFile(path.join(tmpDir, "knowledge", "summary.md"), "utf-8");
     expect(Buffer.byteLength(content, "utf-8")).toBeLessThanOrEqual(2048);
     expect(content).toContain("Regenerated claim");
+  });
+});
+
+describe("enforceSummaryFreshness", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "sea-test-"));
+    await mkdir(path.join(tmpDir, "knowledge"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("regenerates stale summary when counts or open IDs drift", async () => {
+    const findings = [makeFinding({ status: "verified", claim: "Fresh claim" })];
+    const questions = [
+      makeQuestion({ id: "Q001", status: "open", questionType: "design-space", domain: "alpha" }),
+      makeQuestion({ id: "Q002", status: "resolved" }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(
+      path.join(tmpDir, "knowledge", "questions.jsonl"),
+      questions.map((q) => JSON.stringify(q)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(path.join(tmpDir, "knowledge", "summary.md"), "# Knowledge Summary\n\nstale", "utf-8");
+
+    const changed = await enforceSummaryFreshness(tmpDir);
+    expect(changed).toBe(true);
+
+    const content = await readFile(path.join(tmpDir, "knowledge", "summary.md"), "utf-8");
+    expect(content).toContain("1 findings: 1 verified, 0 provisional, 0 refuted, 0 superseded.");
+    expect(content).toContain("2 questions: 1 resolved, 1 open, 0 exhausted.");
+    expect(content).toContain("`Q001` [design-space] alpha");
+  });
+
+  it("leaves a fresh summary unchanged", async () => {
+    const findings = [makeFinding({ status: "verified", claim: "Fresh claim" })];
+    const questions = [makeQuestion({ id: "Q001", status: "open", questionType: "design-space", domain: "alpha" })];
+    const summary = generateFallbackSummary(findings, questions);
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(
+      path.join(tmpDir, "knowledge", "questions.jsonl"),
+      questions.map((q) => JSON.stringify(q)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(path.join(tmpDir, "knowledge", "summary.md"), summary, "utf-8");
+
+    const changed = await enforceSummaryFreshness(tmpDir);
+    expect(changed).toBe(false);
   });
 });
 

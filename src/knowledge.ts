@@ -257,6 +257,57 @@ export async function enforceSummarySize(projectDir: string): Promise<boolean> {
   return true;
 }
 
+function truncateSummaryClaim(claim: string, maxLen: number = 140): string {
+  const singleLine = claim.replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxLen) return singleLine;
+  return singleLine.slice(0, Math.max(0, maxLen - 3)).trimEnd() + "...";
+}
+
+function summaryIsFresh(
+  summary: string,
+  findings: Finding[],
+  questions: Question[]
+): boolean {
+  if (!summary.trim()) return false;
+
+  const counts = findingCounts(findings);
+  const openQuestions = questions.filter((q) => q.status === "open");
+  const resolvedQuestions = questions.filter((q) => q.status === "resolved");
+  const exhaustedQuestions = questions.filter((q) => q.status === "exhausted");
+
+  const findingsFragment = `${counts.total} findings`;
+  const questionsFragment = `${resolvedQuestions.length} resolved, ${openQuestions.length} open, ${exhaustedQuestions.length} exhausted`;
+
+  if (!summary.includes(findingsFragment) || !summary.includes(questionsFragment)) {
+    return false;
+  }
+
+  return openQuestions.every((q) => summary.includes(q.id));
+}
+
+/**
+ * Refresh summary.md if it is missing or no longer matches current store counts/open IDs.
+ * Uses a deterministic store-derived summary so compact but stale summaries cannot linger.
+ */
+export async function enforceSummaryFreshness(projectDir: string): Promise<boolean> {
+  const findings = await readFindings(projectDir);
+  const questions = await readQuestions(projectDir);
+  const current = await readSummary(projectDir);
+
+  if (summaryIsFresh(current, findings, questions)) {
+    return false;
+  }
+
+  const fallback = generateFallbackSummary(findings, questions);
+  const bytes = Buffer.byteLength(fallback, "utf-8");
+  const final = bytes <= SUMMARY_MAX_BYTES
+    ? fallback
+    : fallback.slice(0, SUMMARY_MAX_BYTES - 20) + "\n\n_(truncated)_";
+
+  await writeFile(summaryPath(projectDir), final, "utf-8");
+  return true;
+}
+
 /**
  * Generate a compressed summary from findings + questions for agent context.
  * Target: <2KB. Called by the summarize agent, but also available as a fallback.
@@ -265,53 +316,39 @@ export function generateFallbackSummary(
   findings: Finding[],
   questions: Question[]
 ): string {
-  const verified = findings.filter((f) => f.status === "verified");
-  const provisional = findings.filter((f) => f.status === "provisional");
-  const refuted = findings.filter((f) => f.status === "refuted");
   const openQs = questions.filter((q) => q.status === "open");
+  const resolvedQs = questions.filter((q) => q.status === "resolved");
+  const exhaustedQs = questions.filter((q) => q.status === "exhausted");
+  const counts = findingCounts(findings);
+  const latestFindings = findings.slice(-3).reverse();
 
-  const lines: string[] = ["# Knowledge Summary\n"];
+  const lines: string[] = [
+    "# Knowledge Summary",
+    "",
+    "## Store",
+    `${counts.total} findings: ${counts.verified} verified, ${counts.provisional} provisional, ${counts.refuted} refuted, ${counts.superseded} superseded.`,
+    `${questions.length} questions: ${resolvedQs.length} resolved, ${openQs.length} open, ${exhaustedQs.length} exhausted.`,
+    "",
+  ];
 
-  if (verified.length > 0) {
-    lines.push("## Verified Findings");
-    for (const f of verified.slice(0, 20)) {
-      lines.push(`- [${f.tag}] ${f.claim} (confidence: ${f.confidence})`);
-    }
-    if (verified.length > 20) lines.push(`- ... and ${verified.length - 20} more`);
-    lines.push("");
-  }
-
-  if (provisional.length > 0) {
-    lines.push("## Provisional (unverified)");
-    for (const f of provisional.slice(0, 10)) {
-      lines.push(`- [${f.tag}] ${f.claim}`);
-    }
-    if (provisional.length > 10) lines.push(`- ... and ${provisional.length - 10} more`);
-    lines.push("");
-  }
-
-  if (refuted.length > 0) {
-    lines.push("## Refuted");
-    for (const f of refuted.slice(0, 5)) {
-      lines.push(`- ~~${f.claim}~~`);
+  if (latestFindings.length > 0) {
+    lines.push("## Latest Findings");
+    for (const f of latestFindings) {
+      lines.push(`- \`${f.id}\` [${f.tag}/${f.status}] ${truncateSummaryClaim(f.claim)}`);
     }
     lines.push("");
   }
 
   if (openQs.length > 0) {
-    lines.push("## Open Questions");
-    const high = openQs.filter((q) => q.priority === "high");
-    const medium = openQs.filter((q) => q.priority === "medium");
-    for (const q of high) {
-      lines.push(`- **[HIGH]** ${q.question}`);
+    lines.push("## Open Branches");
+    for (const q of openQs.slice(0, 10)) {
+      lines.push(`- \`${q.id}\` [${q.questionType}] ${q.domain}`);
     }
-    for (const q of medium.slice(0, 5)) {
-      lines.push(`- [medium] ${q.question}`);
-    }
+    if (openQs.length > 10) lines.push(`- ... and ${openQs.length - 10} more`);
     lines.push("");
   }
 
-  lines.push(`\n_${findings.length} findings, ${openQs.length} open questions_`);
+  lines.push("_Store-derived summary regenerated from findings/questions._");
 
   return lines.join("\n");
 }
