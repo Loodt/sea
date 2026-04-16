@@ -98,14 +98,15 @@ accuracy: 0.25 | coverage: 0.20 | coherence: 0.15 | insight: 0.20 | process: 0.2
 ## Infrastructure Debt
 Code-required gaps:
 1. **Selector-state enforcement** (HIGH) — Exploit mode, closure, non-closing answer, mechanism debt, thin-closure: all prompt-only. Need persistent branch-local state + code guard.
-2. **SOURCE fast-track graduation** (MEDIUM) — Code uses 3-dispatch aging; playbook says 2 for ≥0.90 SOURCE.
-3. **Observability** (MEDIUM) — PERSISTENCE_GAP, HOLLOW_ANSWER, DISPATCH_GAP, EXHAUSTED_UNRESOLVED: emit consistently.
+2. **Observability** (MEDIUM) — PERSISTENCE_GAP, HOLLOW_ANSWER, DISPATCH_GAP, EXHAUSTED_UNRESOLVED: emit consistently.
 
 ### Closed
 - ~~**Findings store snapshot/restore**~~ — `src/store-snapshot.ts` + wired into `conductor.ts` before integrate. Auto-restore on zero-out, >50% loss, or verified removal. `STORE_CLOBBER_RESTORED` span logs full diff.
 - ~~**Type-creation enforcement + convergence caps**~~ — `src/question-caps.ts` runs post-integration: per-type queue cap (block when open > dispatch cap), iter-boundary caps (12/15/18/20), per-dispatch new-question cap (landscape ≤5, other ≤3). `QUESTION_CAP_TRIMMED` span per trim.
 - ~~**Same-type cap + re-dispatch guard**~~ — `src/selection-guards.ts` runs pre-dispatch: non-open re-dispatch swap, re-dispatch type-mismatch correction (scoped to questions with prior metric only), same-type 3rd-consecutive swap. `SELECTION_GUARD_INTERVENED` span per intervention.
 - ~~**Lineage writer**~~ — `appendLineageEntry` in `conductor.ts` runs after every iteration's metric write (changeType derived from outcome: progress/no-change/exhaustion/strategic/infrastructure/narrowed) and after meta-evolution (target = playbook path). Was prompt-only and never fired in conductor architecture (no separate evolve step). Historical iters of jarvis-architecture have no lineage; future iters populate `lineage/changes.jsonl`.
+- ~~**SOURCE-URL graduation gate**~~ — `graduateFindings` in `src/knowledge.ts` now requires `/^https?:\/\//` on `source`; `enforceSourceUrls` downgrades `[SOURCE]` without a valid URL to `[UNKNOWN]` at integration time (parallel to `enforceDerivationChains`). `needsReview` field on `Finding` blocks graduation for URL-resolves-but-claim-mismatch cases. `SOURCE_URL_MISSING` span per downgrade.
+- ~~**SOURCE fast-track graduation**~~ — Deprioritized (not shipped). See EXP-035: ≥0.90 confidence 2-dispatch fast-track offers only 1-dispatch speedup, creates a confidence cliff at 0.90 that LLM scoring isn't calibrated for, and undercuts the newly-tightened graduation gate. No project has shown verification lag as a blocker. Revive with evidence if that changes.
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
