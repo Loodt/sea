@@ -286,6 +286,7 @@ Then select the highest-value question (new or existing) for dispatch.` : ""}
    - **synthesis** — combine existing findings
    - **first-principles** — derive novel conclusions from axioms + verified findings. USE WHEN: question requires conclusion not findable by search, OR ≥2 data-hunts exhausted on same topic, OR question asks for a derived/calculated answer. PREREQUISITE: ≥5 verified OR ≥20 SOURCE-tagged findings in the question's domain.
    - **design-space** — map solution options from constraints. USE WHEN: question asks to compare approaches, OR ≥3 mechanism questions resolved and next step is "which approach is best". PREREQUISITE: ≥5 verified OR ≥20 SOURCE-tagged findings in the question's domain.
+   - **divergence** — structured white-space provocation at the governing-principle level. USE WHEN: iter ≥6 and last 3 dispatches clustered in ≤2 mechanism classes, OR frontier is accretive (findings grow but new principle classes do not), OR a landscape/mechanism branch stalled with narrow survivors. PREREQUISITE: ≥10 findings in store (enough substrate to audit). NOT for initial exploration (use landscape instead). Do NOT dispatch when closure mode is active.
 3. Select exactly ONE question
 4. Output your selection as a JSON code block:
 
@@ -293,7 +294,7 @@ Then select the highest-value question (new or existing) for dispatch.` : ""}
 {
   "questionId": "Q___",
   "question": "the full question text",
-  "questionType": "landscape|kill-check|data-hunt|mechanism|synthesis|first-principles|design-space",
+  "questionType": "landscape|kill-check|data-hunt|mechanism|synthesis|first-principles|design-space|divergence",
   "reasoning": "why this question has the highest value right now (2-3 sentences)",
   "relevantFindingIds": ["F001", "F003"],
   "suggestedExpertType": "descriptive label for the expert needed (e.g., 'chlorination process chemist' or 'thermodynamic reasoner')",

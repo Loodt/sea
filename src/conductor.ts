@@ -21,6 +21,7 @@ import {
   updateQuestion,
   graduateFindings,
   enforceSummarySize,
+  enforceSummaryFreshness,
   deduplicateFindings,
   aggregateReferences,
   normalizeQuestionIds,
@@ -320,8 +321,6 @@ export async function runConductorIteration(
       });
     }
 
-    await enforceSummarySize(projectDir);
-
     // Deduplicate findings (expert writes directly + integration may re-append)
     const deduped = await deduplicateFindings(projectDir);
     if (deduped > 0) {
@@ -358,6 +357,15 @@ export async function runConductorIteration(
     // Aggregate source URLs into references/links.md
     await aggregateReferences(projectDir);
 
+    const summaryResized = await enforceSummarySize(projectDir);
+    if (summaryResized) {
+      console.log("   ✓ Summary regenerated to stay within 2KB");
+    }
+    const summaryRefreshed = await enforceSummaryFreshness(projectDir);
+    if (summaryRefreshed) {
+      console.log("   ✓ Summary refreshed from current knowledge store");
+    }
+
     // Update wiki output (non-fatal — wiki is derived, not source of truth)
     try {
       const { updateWiki } = await import("./wiki.js");
@@ -389,6 +397,15 @@ export async function runConductorIteration(
       }
     } catch (err) {
       console.log(`   ⚠ Global expert library update failed: ${(err as Error).message}`);
+    }
+
+    // Refresh audit report so output docs track the live store after each dispatch.
+    try {
+      const { runAudit } = await import("./audit.js");
+      await runAudit(projectDir);
+      console.log("   ✓ Audit report refreshed");
+    } catch (err) {
+      console.log(`   ⚠ Audit refresh failed: ${(err as Error).message}`);
     }
   }
 
@@ -768,7 +785,7 @@ function parseQuestionSelection(output: string): QuestionSelection | null {
   return null;
 }
 
-const VALID_QUESTION_TYPES = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis", "first-principles", "design-space"] as const;
+const VALID_QUESTION_TYPES = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis", "first-principles", "design-space", "divergence"] as const;
 
 function buildSelection(parsed: Record<string, unknown>): QuestionSelection {
   const qt = typeof parsed.questionType === "string" &&

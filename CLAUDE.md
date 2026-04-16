@@ -1,7 +1,7 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v047 (jarvis-architecture iter 0-26: 27/48 answered, 1 exhausted, avg 16.4 f/dispatch; 170 findings (53 verified, 31%). 20 open (18 dispatchable) — 13 design-space at 3.25× cap. Kill-check: 9/27 dispatches at 10.9 avg yield vs mechanism 24.0 at 7%)
+- Conductor version: v051 (v050 synthesis-velocity mandate VALIDATED: iter 9 LQ001 +36f, 3q resolved, 1 new = net -2q, no cargo-cult. Iter 10-11 natural rotation: mechanism LQ016 +18f, landscape close LQ004 +40f across 4 inner iters. 10-disp window local-llm-stack iter 2-11: kill-check 5, synthesis/mechanism/first-principles/design-space/landscape 1 each, avg 22f/disp, 1 successful exhaustion (LQ013 strategy-limit +31f). All Type-debt mandates cleared (reasoning at iter 6, synthesis at iter 9, mechanism at iter 10). v051 = hold v050; composite healthy, no new dysfunction. Next synthesis eligible iter 14 per cadence (5-disp gap when >100 findings). Standing rollback trigger: next synthesis creates ≥2 new questions without resolving any, OR Type-debt mandate fires but misses clearance criterion.)
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff (4 LLM calls per iteration)
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
 - Multi-provider: `--provider`, `SEA_PROVIDER`, or harness auto-detect. Config in `types.ts`.
@@ -13,8 +13,10 @@ Rank by: decision-relevance per research cost > information gain > priority > fe
 **Store maturity:** Total findings >60 OR verified >30 → boost synthesis below never-dispatched. newQuestionsCreated = 0 for 2+ dispatches and iter ≥4 → frontier mapped; boost synthesis/first-principles on existing.
 **Exploit mode:** Last 4 dispatches answered/killed with attrition = 0 and avg findingsAdded ≥9 → next must exploit store: synthesis if eligible, else mechanism or first-principles. No new landscape/data-hunt unless it unblocks kill-check.
 **Mechanism promotion:** First-principles/design-space answered in ≤2 inner iters and related open mechanism exists → boost above new landscape/data-hunt. iter ≥8 and 2+ branch questions resolved by reasoning without mechanism on that branch → elevate mechanism. Fast reasoning wins → operational understanding before more derivation.
+**Type debt:** Iter ≥5, 0 first-principles ever dispatched, ≥5 verified findings → first-principles mandatory next, preempts exploit-mode synthesis and kill-check ranking. Iter ≥6, 0 mechanism ever dispatched, ≥3 reasoning-type answers in store → mechanism mandatory next. 0 synthesis ever dispatched + store ≥60 findings → synthesis mandatory next, preempts exploit-mode and kill-check ranking. Mandate (not boost): boost rules lost to kill-check in local-llm-stack iter 1-5 (0 reasoning at iter 5/81 findings) and iter 7-8 (0 synthesis at 139 findings). Cleared once missing type dispatched ≥1 (first-principles/mechanism: ≥5 findings; synthesis: ≥1 question resolved).
+**Divergence (EXPERIMENTAL):** Iter ≥6, last 3 dispatches clustered in ≤2 principle classes, store ≥10 findings → divergence eligible. Structured white-space provocation (Subtraction + Integrative required). Findings tag `[DERIVED: divergence-{subtraction|integrative|whitespace}]`. Hypothesis: produces ≥2 findings no subsequent landscape/data-hunt would have generated. Rollback trigger: 2 consecutive divergence dispatches with 0 novel-principle findings.
 **Hot-streak conversion:** 2 of last 3 dispatches are reasoning/synthesis answers in ≤2 inner iters and related mechanism/kill-check is open → dispatch that branch-closer next.
-**Synthesis cadence:** Requires ≥50 findings OR ≥25 verified. After 8+ dispatches since last (5 when >100) if store grew >15. Velocity: mandatory when 0 ever run and store >60. Ceiling: max 2 in 6-dispatch window. Must resolve its question or net-reduce open count; new questions capped at 1. 2× exhaustion in project → first-principles before retry.
+**Synthesis cadence:** Requires ≥50 findings OR ≥25 verified. After 8+ dispatches since last (5 when >100) if store grew >15. Ceiling: max 2 in 6-dispatch window. Must resolve its question or net-reduce open count; new questions capped at 1. 2× exhaustion in project → first-principles before retry. (Velocity mandate: see Type debt.)
 **Question creation caps:** landscape ≤5; non-landscape ≤3. Iter 12 + open >12 → 1. Iter 15+ → 1. Iter 18 + open >8 → 0. Iter 20 + >70% resolved → 0 for non-kill-check.
 **Closure mode:** After iter 6: last 3 added ≥30 findings but resolved ≤1 → force synthesis/first-principles/design-space. Last 5 created 0 new and resolved ≥4 → closure mode (≥2 of 3 dispatches on existing consolidation). Last 6 resolved ≥5 and created ≤1 → late-stage: block new landscape/data-hunt unless it unlocks kill-check or empirical gate.
 **Type-queue drain:** Type >2× cap in open queue → next synthesis scoped to that type's consolidation. >3× → drain mode: kill-check also targets that type. Block type creation when open > cap for that type.
@@ -30,6 +32,7 @@ Rank by: decision-relevance per research cost > information gain > priority > fe
 | synthesis | 3 | Combine findings. Scope to cluster. Must net-reduce questions. |
 | first-principles | 3 | Axioms + verified. Mandatory after iter 4. <5 findings = thin prerequisites. |
 | design-space | 4 | Constraints → solutions. Auto-generate when ≥3 mechanism/data-hunt resolved. |
+| divergence | 3 | White-space provocation at principle level. Subtraction + Integrative mandatory. Iter ≥6 + clustered dispatches. EXPERIMENTAL. |
 
 ## Expert Convergence
 - **answered** — resolved with well-evidenced findings
@@ -66,8 +69,11 @@ DERIVED: confidence ≥0.90, derivationChain ≥2 premises (all verified), age �
 - **Summary size:** ≤2KB via `enforceSummarySize()`.
 
 ## Hard Rules
-- Launch `sea conduct` as background task; wait for notification, do not poll.
-- Keep stdout/stderr visible for long-running commands.
+- Launch `sea conduct` / `sea loop` as background task with stdout+stderr redirected to `<project>-conduct.log` / `.err.log` (or `-loop.log`) in repo root. Immediately emit to the user the exact tail commands for a second terminal, both forms verbatim (Windows console default is cp1252; PowerShell MUST set UTF-8 or emoji/arrows render as mojibake):
+  - PowerShell: `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Content C:\Users\mtlb\code\sea\<project>-conduct.log -Wait -Tail 40 -Encoding UTF8`
+  - Git Bash: `tail -f /c/Users/mtlb/code/sea/<project>-conduct.log`
+  Wait for notification, do not poll.
+- Keep stdout/stderr visible for short commands (<5 min); redirect only the hours-scale background jobs above.
 - Context budgets: `types.ts` CONTEXT_BUDGETS.
 - Personas full length; iter 1: file reference + critical sections (~6KB cap).
 - Knowledge store is source of truth, not `output/` reports.

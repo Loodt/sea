@@ -225,7 +225,16 @@ QUESTION: ${selection.question}
 QUESTION_ID: ${selection.questionId}
 QUESTION_TYPE: ${selection.questionType}
 SUGGESTED_EXPERT_TYPE: ${selection.suggestedExpertType}
-${selection.questionType === "data-hunt" ? "\n⚠ DATA-HUNT QUESTION: If after 2 iterations you have found no concrete data, declare exhaustion in your next handoff rather than repeating similar searches. This question type has high exhaustion risk — do not burn iterations on empty search spaces.\n" : ""}
+${selection.questionType === "data-hunt" ? "\n⚠ DATA-HUNT QUESTION: If after 2 iterations you have found no concrete data, declare exhaustion in your next handoff rather than repeating similar searches. This question type has high exhaustion risk — do not burn iterations on empty search spaces.\n" : ""}${selection.questionType === "divergence" ? `\n🔀 DIVERGENCE QUESTION: Your mandate is structured creative provocation at the governing-principle level (L0–L1), not new surveys or deeper mechanism work. Run this 4-stage workflow inside your iterations:
+
+  1. **Audit** — Inventory existing findings by governing principle (not by domain label). Identify white space: principle classes with ≤1 finding, or classes entirely absent. If principles are already well-covered across the store, declare status "narrowed" with a rationale — do not manufacture novelty.
+  2. **Provoke** — Generate ≥4 questions that open new principle regions. Each provocation MUST state the governing principle it targets and be non-redundant at that level (different words, same principle = redundant — drop it). At least one provocation must use each of:
+     - **Subtraction Protocol** — "What if you deleted the most expensive / most accreted step? What simpler mechanism could carry the function?"
+     - **Integrative Provocation** — "Two existing findings or approaches have opposing requirements on the same variable — what model contains the truth of both (separated in time, space, scale, or sequence)?"
+  3. **Filter** — Keep only provocations that (a) have a stateable physical/logical basis, (b) produce ≥2 break-risk questions a domain expert could run, (c) are not a rewording of a killed or settled branch.
+  4. **Handoff** — Your findings must be tagged \`[DERIVED: divergence-subtraction]\`, \`[DERIVED: divergence-integrative]\`, or \`[DERIVED: divergence-whitespace]\`, each with a derivationChain citing which existing finding IDs motivated the provocation. New questions go in handoff.newQuestions (capped at 3 per dispatch — the post-integration cap will trim the rest). Prefer 2 genuinely novel provocations over 5 clustered ones.
+
+Anti-pattern: repackaging a killed concept in new vocabulary, or proposing provocations at the mechanism level (L2+: specific chemistries, equipment, parameters) instead of principle level.\n` : ""}
 
 PROJECT GOAL:
 ${truncate(goal, 2000)}

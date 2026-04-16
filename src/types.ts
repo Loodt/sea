@@ -99,7 +99,7 @@ export interface LineageEntry {
 
 export type EpistemicTag = "SOURCE" | "DERIVED" | "ESTIMATED" | "ASSUMED" | "UNKNOWN";
 export type FindingStatus = "provisional" | "verified" | "refuted" | "superseded";
-export type QuestionStatus = "open" | "resolved" | "deferred" | "empirical-gate";
+export type QuestionStatus = "open" | "resolved" | "deferred" | "empirical-gate" | "exhausted";
 
 export type EngineeringType =
   | "MEASUREMENT"
@@ -161,8 +161,12 @@ export interface Question {
   domain: string;
   iteration: number;
   status: QuestionStatus;
-  resolvedAt: number | null;
+  questionType?: QuestionType;
+  resolvedAt: number | string | null;
   resolvedBy: string | null;
+  exhaustedAt?: string | null;
+  exhaustionReason?: string | null;
+  notes?: string;
 }
 
 // ── Pipeline Layer ──
@@ -301,7 +305,7 @@ export interface ExpertConfig {
   provider?: Provider;
 }
 
-export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis" | "first-principles" | "design-space";
+export type QuestionType = "landscape" | "kill-check" | "data-hunt" | "mechanism" | "synthesis" | "first-principles" | "design-space" | "divergence";
 
 export interface QuestionSelection {
   questionId: string;
@@ -322,6 +326,7 @@ export const QUESTION_TYPE_ITERATION_CAP: Record<QuestionType, number> = {
   synthesis: 5,
   "first-principles": 3,
   "design-space": 4,
+  divergence: 3,
 };
 
 /** Max web searches per inner iteration, by question type. */
@@ -333,6 +338,7 @@ export const QUESTION_TYPE_SEARCH_BUDGET: Record<QuestionType, number> = {
   synthesis: 3,
   "first-principles": 1,
   "design-space": 2,
+  divergence: 4,
 };
 
 /**
@@ -349,6 +355,7 @@ export const QUESTION_TYPE_DISPATCH_CAP: Record<QuestionType, number> = {
   synthesis: 3,
   "first-principles": 3,
   "design-space": 4,
+  divergence: 3,
 };
 
 /** Per-dispatch cap on new questions created during integration. */
