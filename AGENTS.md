@@ -64,11 +64,13 @@ DERIVED graduates when confidence ≥0.90, derivationChain has ≥2 premises, al
 - **Summary size gate:** `summary.md` ≤2KB via `enforceSummarySize()`.
 
 ## Hard Rules
-- Launch `sea conduct` as a background task; wait for notification, do not poll.
-- When launching long-running commands, keep stdout/stderr visible in the terminal. Do not hide progress only in redirected log files unless the user explicitly asks for silent background execution.
+- Launch `sea conduct` / `sea loop` as background tasks; wait for notification, do not poll.
+- <!-- DIVERGES FROM CLAUDE.md: Codex shell output is returned as a captured post-exit buffer, not a live pane; default to a visible second terminal instead of log redirection so the user can watch progress without consuming main-session context. -->
+- Keep stdout/stderr visible for short commands (<5 min). For hours-scale `sea conduct` / `sea loop` runs in Codex, prefer a visible separate terminal over repo-log redirection; use log files only when the user explicitly asks for them or a non-visible launch, and if you do redirect, immediately emit exact tail commands (`Get-Content -LiteralPath .\<log> -Wait` for PowerShell or `tail -f ./<log>` for Git Bash).
+- Do not use `tee` as the default split-stream strategy for long-running SEA jobs in Codex; it still binds output to the captured command stream instead of freeing the main session context.
 - For Codex sessions on Windows, prefer an explicit `--provider codex` launch in a visible separate `cmd.exe` window so the user can keep chatting here while watching live output there.
 - Do not use PowerShell's `npx` shim for repo execution on Windows (`npx.ps1` can be blocked by execution policy). Use `cmd.exe` with `npx.cmd`, `sea`, or `node dist/cli.js`.
-- Preferred Codex Windows launch pattern: `Start-Process -FilePath 'cmd.exe' -ArgumentList @('/k', 'cd /d <repo> && node dist/cli.js --provider codex conduct <project>') -PassThru`
+- Preferred Codex Windows launch pattern: `Start-Process -FilePath 'cmd.exe' -ArgumentList @('/k', 'cd /d <repo> && node dist/cli.js --provider codex <conduct|loop> <project>') -PassThru`
 - Context budgets per agent: `types.ts` `CONTEXT_BUDGETS`.
 - Personas stay full length; iter 1 uses file reference + critical sections (~6KB cap).
 - Knowledge store is the source of truth, not `output/` reports.
