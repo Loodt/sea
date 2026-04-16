@@ -1,45 +1,41 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v046 (jarvis-architecture iter 0-26: 27/48 answered, 1 exhausted, avg 16.4 f/dispatch; 170 findings (45 verified, 26%). 20 open — 13 design-space at 3.25× cap. Lineage writer landed dfb62af; populates from iter 27 onward.)
+- Conductor version: v049 (iter 30-35 validated branch-closing value from synthesis/mechanism/kill-check; design-space remains useful only when it compiles a real choice point into closure.)
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff (4 LLM calls per iteration)
-- Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
-- Multi-provider: `--provider`, `SEA_PROVIDER`, or harness auto-detect (CLAUDECODE / CODEX_CLI). Config in `types.ts`.
+- Knowledge layer: `findings.jsonl` + `questions.jsonl` + `summary.md` per project
+- Multi-provider: `--provider`, `SEA_PROVIDER`, or harness auto-detect (`CLAUDECODE` / `CODEX_CLI`). Config in `types.ts`.
 - Dispatch observations live in `docs/dispatch-observations.md`, not here
 
 ## Question Selection & Types
-Rank by: decision-relevance per research cost > information gain > priority > feasibility > data density > staleness > dependency-unlocking.
+Rank by: closure probability per research cost > decision-relevance > information gain > priority > feasibility > data density > staleness > dependency-unlocking.
 **Selection guards:** FIRST reject non-open questions and near-duplicate open questions. Crashed questions dispatch next; do not interleave. Never reclassify a question on re-dispatch.
 **Queue pressure:** Pruning mode auto when open >15 OR open:resolved >2:1. Prefer existing over new, boost kill-check/synthesis, deprioritize mechanism. Escalation: >3:1 → cap new at 1; >4:1 → cap new at 0.
-**Store maturity:** When total findings >60 OR verified >30, boost synthesis priority below never-dispatched open questions. If newQuestionsCreated = 0 for 2+ dispatches and iter ≥4, treat the frontier as mapped and boost synthesis/first-principles on existing questions.
-**Exploit mode:** If the last 4 dispatches are answered/killed with attrition = 0 and average findingsAdded ≥9, the next dispatch must exploit the store on an existing question: synthesis first if eligible, otherwise mechanism or first-principles. Do not open a new landscape/data-hunt branch unless it directly unblocks a kill-check.
-**Hot-streak conversion:** If 2 of the last 3 dispatches are reasoning/synthesis answers completed in ≤2 inner iterations and a related mechanism or kill-check question is open, dispatch that branch-closing question next before another synthesis or any new landscape/data-hunt.
-**Mechanism promotion:** When first-principles or design-space answers in ≤2 inner iterations and a related open mechanism question exists, boost that mechanism above new landscape/data-hunt. Fast reasoning wins should be converted into operational understanding immediately.
+**Exploit mode:** If the last 4 dispatches are answered/killed with attrition = 0 and average findingsAdded ≥9, the next dispatch must exploit the store on an existing question. Prefer synthesis if eligible; otherwise mechanism, kill-check, or first-principles. Do not open a new landscape/data-hunt branch unless it directly unblocks a kill-check.
+**Closure mode:** If the last 6 dispatches resolved ≥5 questions and created ≤1 new question, block new landscape/data-hunt unless it directly unlocks an open kill-check or empirical gate. If the last 5 dispatches created 0 new questions and resolved ≥4, keep at least 2 of every next 3 dispatches on existing-question kill-check/mechanism/synthesis/first-principles.
+**Resolution bias:** In closure mode, rank question types by resolved-per-dispatch before raw findingsAdded. Prefer mechanism/kill-check/synthesis over another same-branch design-space when both are available and recent attrition is 0.
+**Branch-closure rule:** If >50% of open questions are design-space, or 3 related design-space/first-principles/synthesis answers land without any mechanism/kill-check on that branch, or 2 of the last 3 reasoning/synthesis answers on that branch completed in ≤2 inner iterations, the next dispatch on that branch must be mechanism or kill-check unless empirically gated. Do not spend a third consecutive branch-local dispatch on design-space/first-principles/synthesis unless it directly closes the final open question.
 **Mechanism debt:** If iter ≥8 and 2+ related questions on a branch were resolved by reasoning/synthesis without any mechanism dispatch on that branch, elevate mechanism above additional first-principles/design-space/synthesis unless the only blocker is empirical-gated.
-**Synthesis cadence:** Synthesis requires ≥50 findings OR ≥25 verified. Dispatch it after 8+ dispatches since last synthesis (5 when store >100) if the store also grew >15. Velocity override: mandatory when no synthesis has ever run and store >60. Ceiling: max 2 synthesis in any 6-dispatch window.
-**Synthesis scope:** It must resolve its question or net-reduce open count. Cap new questions from synthesis at 1. If synthesis exhausts twice in one project, dispatch first-principles before retrying it.
+**Reasoning cadence:** Synthesis requires ≥50 findings OR ≥25 verified. Dispatch it after 8+ dispatches since last synthesis (5 when store >100) if the store also grew >15. Velocity override: mandatory when no synthesis has ever run and store >60. Ceiling: max 2 synthesis in any 6-dispatch window. Do not dispatch first-principles/design-space on thin stores: minimum 5 verified OR 20 SOURCE-tagged in-domain findings.
 **Question creation caps:** landscape ≤5 new; non-landscape ≤3. Iter 12 + open >12 → cap new at 1. Iter 15+ → cap new at 1. Iter 18 + open >8 → cap new at 0. Iter 20 + >70% resolved → cap new at 0 for non-kill-check.
-**Compression and closure:** After iter 6, if the last 3 dispatches added ≥30 findings but resolved ≤1 question, the next dispatch must be synthesis, first-principles, or design-space. If the last 5 dispatches created 0 new questions and resolved ≥4, enter closure mode and keep at least 2 of every next 3 dispatches on existing-question kill-check/mechanism/synthesis/first-principles. New questions in closure mode require a concrete unblock justification.
-**Closure acceleration:** If the last 6 dispatches resolved ≥5 questions and created ≤1 new question, treat the project as late-stage even if open count is modest: block new landscape/data-hunt unless it directly unlocks an open kill-check or empirical gate.
-**Exhaustion follow-through:** 0 findings by inner iter 2 forces early-exit evaluation. Any exhausted dispatch with ≥12 findings is harvested frontier; the next dispatch on that branch must be synthesis, first-principles, design-space, or kill-check on the sibling/open question, not another adjacent data-hunt/mechanism harvest unless it unlocks a blocked kill-check.
-**Resolution efficiency:** `answered` + `questionsResolved = 0` is evidence gain, not closure. After such a dispatch, prefer sibling kill-check/mechanism/synthesis on that branch above repeating the same type or opening a new branch.
-**Yield conversion:** If 2 of the last 3 existing-question reasoning/synthesis dispatches resolved their questions with findingsAdded ≤5, the next dispatch on that branch cluster must be mechanism or kill-check. Do not spend a third consecutive branch-local dispatch on first-principles/design-space/synthesis unless it directly closes the final open question.
+**Yield conversion:** After iter 6, if the last 3 dispatches added ≥30 findings but resolved ≤1 question, the next dispatch must be synthesis, first-principles, design-space, or kill-check on an existing branch. Any `answered` dispatch with `questionsResolved = 0` is evidence gain, not closure; prefer sibling kill-check/mechanism/synthesis above repeating the same type or opening a new branch.
+**Exhaustion follow-through:** 0 findings by inner iter 2 forces early-exit evaluation. Any exhausted dispatch with ≥12 findings is harvested frontier; the next dispatch on that branch must exploit the harvest with synthesis, first-principles, design-space, or a sibling kill-check, not another adjacent data-hunt/mechanism sweep unless it unlocks a blocked kill-check. Harvested `data-gap` exhaustions with ≥15 findings must convert into such an exploit dispatch within the next 2 dispatches.
 **Type rotation:** Max 2 consecutive dispatches of the same type. After iter 4, first-principles and design-space are mandatory once prerequisites exist and they have never been dispatched. After 6+ dispatches since a reasoning type and store growth >40 findings, boost a reasoning type. Cap data-hunt at 5 before a reasoning type.
 | Type | Cap | Selection guidance |
 |------|-----|-------------------|
 | landscape | 5 | Broad survey. Dispatch first to establish the frontier, then stop reopening it once the store is clearly productive. |
 | kill-check | 5 | Falsify hypotheses. Prefer when >3 open pathways. Never deprioritize kill-check because it prunes branches fastest. |
 | data-hunt | 5 | Specific values. Highest yield early; repeated low-yield or harvested exhaustions mean the store should be exploited, not expanded sideways. |
-| mechanism | 5 | How/why. Multi-iter convergence is normal. Boost after successful reasoning dispatches, or after iter 10 if related questions have been resolved but mechanism has not run. |
-| synthesis | 3 | Combine store findings. Scope to a cluster, not the whole store. |
+| mechanism | 5 | How/why. Multi-iter convergence is normal. Boost after successful reasoning dispatches, after iter 10 if related questions have been resolved but mechanism has not run, and in late-stage closure. |
+| synthesis | 3 | Combine store findings. Scope to a cluster, not the whole store. It must resolve its question or net-reduce open count; cap new questions from synthesis at 1. |
 | first-principles | 3 | Derive from axioms + verified findings. Mandatory after iter 4 once prerequisites exist. |
-| design-space | 4 | Map constraints to solution space. Auto-generate when ≥3 mechanism/data-hunt questions are resolved. |
+| design-space | 4 | Map constraints to solution space. Use to close real choice points, not to prolong already-mapped branches. |
 
 ## Expert Convergence
 - **answered** — resolved with well-evidenced findings
 - **killed** — non-viable; equally valuable as answered
 - **narrowed** — partial progress. Re-dispatch must include prior handoff findings. Same question narrowed ≥2 times with declining yield → evaluate for exhaustion.
-- **exhausted** — diminishing returns. Subtypes: data-gap | strategy-limit | infrastructure. Integration must create `[DERIVED: exhaustive-search]`. Data-gap auto-gates dependent questions.
+- **exhausted** — diminishing returns. Subtypes: `data-gap` | `strategy-limit` | `infrastructure`. Integration must create `[DERIVED: exhaustive-search]`. Data-gap auto-gates dependent questions.
 - **crashed** — infrastructure failure. Not exhausted; re-dispatch eligible. Integrate partial findings before persona reset.
 - **empirical-gate** — requires physical measurement; do not re-dispatch. Auto-gate dependent questions.
 - For first-principles/design-space, `narrowed` + empirical-gate is successful; do not penalize it.
@@ -58,19 +54,21 @@ DERIVED graduates when confidence ≥0.90, derivationChain has ≥2 premises, al
 - **Persistence gate:** Persisted findings must match produced findings; log `PERSISTENCE_GAP` if not. Summarize before synthesize; persisted finding IDs must exist in `findings.jsonl`.
 - **Hollow answer gate:** answered + 0 findingsAdded → log `HOLLOW_ANSWER`. More than 2 in one project forces review of convergence criteria and question scoping.
 - **Completion gate:** All questions resolved (0 open) → status `completed`. Conductor skips completed.
-- **Verification floor:** After 8+ dispatches with verified/total <30%, or when >75% of questions are resolved, boost kill-check and synthesis. Completed project <30% verified → log `LOW_VERIFICATION_COMPLETION`.
+- **Verification floor:** After iter 8 with verified/total <30%, or once >60% of questions are resolved, boost kill-check and synthesis and penalize low-leverage design-space. Completed project <30% verified → log `LOW_VERIFICATION_COMPLETION`.
 - **Lineage gate:** Evolve must produce a lineage entry every iteration, including no-change holds.
-- **Same-type cap:** Third consecutive dispatch of one question type is blocked.
 - **Dispatch integrity:** Never dispatch answered, killed, empirical-gated, or exhausted questions. If iteration advances without dispatch, log `DISPATCH_GAP`. If `questionsAfter = 0` but `questionsBefore > 0`, treat as `QUESTION_STORE_WIPE`, restore from snapshot, then normalize IDs.
-- **Harvest/closure gate:** 2 harvested-frontier events inside 3 dispatches without an exploitative reasoning dispatch → log `HARVEST_CHAIN` and force synthesis/first-principles/design-space next. In closure mode, opening a new question without resolving or unblocking an existing branch logs `CLOSEOUT_DRIFT` and forces an existing-question dispatch next.
-- **Non-closing answer gate:** 2 `answered` dispatches with `questionsResolved = 0` inside 4 iterations → log `NON_CLOSING_ANSWER` and force the next dispatch to be an existing-question kill-check, mechanism, or synthesis on the same branch cluster.
-- **Thin-closure gate:** 2 `answered` dispatches with `questionsResolved ≥ 1` and `findingsAdded ≤ 4` inside 4 iterations → log `THIN_CLOSURE` and force the next dispatch to be an existing-question mechanism or kill-check on that branch unless only one open question remains.
+- **Closure integrity:** 2 harvested-frontier events inside 3 dispatches without an exploitative reasoning dispatch → log `HARVEST_CHAIN` and force synthesis/first-principles/design-space next. In closure mode, opening a new question without resolving or unblocking an existing branch logs `CLOSEOUT_DRIFT` and forces an existing-question dispatch next. Harvested `data-gap` frontier not exploited within 2 dispatches logs `HARVEST_DRIFT`.
+- **Branch-closure gate:** 2 `answered` dispatches inside 4 iterations that either resolve 0 questions or close with findingsAdded ≤4 log `NON_CLOSING_ANSWER` or `THIN_CLOSURE`; the next dispatch on that branch must be mechanism or kill-check unless only one open question remains. If open design-space >50% and a related open mechanism/kill-check exists, dispatching another same-branch design-space logs `DESIGN_SPACE_OVERHANG` and forces a branch-closing dispatch next.
+- **Metric integrity gate:** Conductor metrics are dispatch-event records, not iteration-unique records. Legitimate multi-dispatch iterations must persist distinct event IDs; dedupe by event identity, never by `conductorIteration` alone. Collision or overwrite logs `EVENT_ID_COLLISION`.
 - **Exhaustion gate:** exhausted + 0 questionsResolved must close the question as exhausted/deferred or log `EXHAUSTED_UNRESOLVED`.
 - **Summary size gate:** `summary.md` ≤2KB via `enforceSummarySize()`.
 
 ## Hard Rules
 - Launch `sea conduct` as a background task; wait for notification, do not poll.
 - When launching long-running commands, keep stdout/stderr visible in the terminal. Do not hide progress only in redirected log files unless the user explicitly asks for silent background execution.
+- For Codex sessions on Windows, prefer an explicit `--provider codex` launch in a visible separate `cmd.exe` window so the user can keep chatting here while watching live output there.
+- Do not use PowerShell's `npx` shim for repo execution on Windows (`npx.ps1` can be blocked by execution policy). Use `cmd.exe` with `npx.cmd`, `sea`, or `node dist/cli.js`.
+- Preferred Codex Windows launch pattern: `Start-Process -FilePath 'cmd.exe' -ArgumentList @('/k', 'cd /d <repo> && node dist/cli.js --provider codex conduct <project>') -PassThru`
 - Context budgets per agent: `types.ts` `CONTEXT_BUDGETS`.
 - Personas stay full length; iter 1 uses file reference + critical sections (~6KB cap).
 - Knowledge store is the source of truth, not `output/` reports.
@@ -83,7 +81,6 @@ DERIVED graduates when confidence ≥0.90, derivationChain has ≥2 premises, al
 - Pattern library: load all failure patterns. New generalizable patterns go in `failure-patterns/` or `success-patterns/`.
 - Expert store writes are idempotent: F9XX IDs sequential, dedupe by ID and claim text. For landscape/first-principles/design-space, IG = findingsAdded + questionsAdded.
 - Reasoning-type findings use `[DERIVED]` with derivationChain. No `[SOURCE]` without URL. Findings without epistemic tags must not be persisted.
-- Do not dispatch first-principles/design-space on thin stores: minimum 5 verified OR 20 SOURCE-tagged in-domain findings. Synthesis requires ≥50 findings OR ≥25 verified.
 - Kill signals prune entire branches; never deprioritize kill-check.
 - Metric `questionType` must match the question record type; no silent reclassification at dispatch.
 
@@ -95,7 +92,7 @@ Valid outcomes:
 **Stagnation:** 2 consecutive non-crash iterations with zero findings and zero resolved → classify as exhausted, blocked, or wrong.
 **Empirical plateau:** >2 questions exhausted as "needs measurement" and remaining open questions depend on them → flag project empirical-gated.
 **Escalation enforcement:** Same heuristic failure across 2+ projects → escalate to infrastructure debt, not another persona heuristic.
-**Meta-evolution:** Read lineage + metrics, identify cross-project patterns, verify protocol against code, then propose changes. Safety Rails are IMMUTABLE.
+**Meta-evolution:** Read lineage + metrics, identify cross-project patterns, verify protocol against code, then propose changes. Prefer tightening selector/gates over adding new prompt heuristics when current expert types are already closing questions. Safety Rails are IMMUTABLE.
 
 ## Scoring Weights
 accuracy: 0.25 | coverage: 0.20 | coherence: 0.15 | insight: 0.20 | process: 0.20
@@ -103,16 +100,10 @@ accuracy: 0.25 | coverage: 0.20 | coherence: 0.15 | insight: 0.20 | process: 0.2
 
 ## Infrastructure Debt
 Open gaps that require code, not heuristics:
-1. **SOURCE fast-track graduation** (MEDIUM) — playbook says SOURCE ≥0.90 confidence graduates after 2 dispatches; `knowledge.ts` still uses the generic aging threshold.
-2. **Early-exit enforcement** (MEDIUM) — zero-finding searches at inner iter 2 still rely on prompt guidance instead of code-level convergence control.
-3. **Observability completeness** (MEDIUM) — ensure `PERSISTENCE_GAP`, `HOLLOW_ANSWER`, `LOW_VERIFICATION_COMPLETION`, `DISPATCH_GAP`, and `EXHAUSTED_UNRESOLVED` are emitted consistently, not only in partial paths.
-4. **Selector-state enforcement** (MEDIUM) — exploit-mode follow-through, closure acceleration, non-closing answer handling, mechanism debt, and thin-closure recovery still depend too much on prompt text instead of persistent branch-local state.
-
-### Closed
-- ~~**Findings store snapshot/restore**~~ — `src/store-snapshot.ts` + wired into `conductor.ts` before integrate. Auto-restore on zero-out, >50% loss, or verified removal. `STORE_CLOBBER_RESTORED` span logs full diff.
-- ~~**Question creation cap enforcement**~~ — `src/question-caps.ts` runs post-integration: per-type queue cap (block when open > dispatch cap), iter-boundary caps (12/15/18/20), per-dispatch new-question cap (landscape ≤5, other ≤3). `QUESTION_CAP_TRIMMED` span per trim.
-- ~~**Same-type cap + re-dispatch guard**~~ — `src/selection-guards.ts` runs pre-dispatch: non-open re-dispatch swap, re-dispatch type-mismatch correction (scoped to questions with prior metric only), same-type 3rd-consecutive swap. `SELECTION_GUARD_INTERVENED` span per intervention.
-- ~~**Lineage writer**~~ — `appendLineageEntry` in `conductor.ts` runs after every iteration's metric write (changeType derived from outcome: progress/no-change/exhaustion/strategic/infrastructure/narrowed) and after meta-evolution (target = playbook path). Was prompt-only and never fired in conductor architecture (no separate evolve step). Historical iters of jarvis-architecture have no lineage; future iters populate `lineage/changes.jsonl`.
+1. **Early-exit enforcement** (MEDIUM) — zero-finding searches at inner iter 2 still rely too much on prompt guidance instead of code-level convergence control.
+2. **Observability completeness** (MEDIUM) — ensure `PERSISTENCE_GAP`, `HOLLOW_ANSWER`, `LOW_VERIFICATION_COMPLETION`, `DISPATCH_GAP`, `EXHAUSTED_UNRESOLVED`, `NON_CLOSING_ANSWER`, `THIN_CLOSURE`, `DESIGN_SPACE_OVERHANG`, `HARVEST_DRIFT`, and `EVENT_ID_COLLISION` are emitted consistently.
+3. **Selector-state enforcement** (HIGH) — exploit-mode follow-through, closure acceleration, harvested-frontier conversion, branch-closure conversion, and mechanism debt still depend too much on prompt text instead of persistent branch-local state.
+4. **Metric event identity** (MEDIUM) — conductor metrics still need durable dispatch event IDs so resumed runs, crash backfills, and same-iteration multi-dispatch cases cannot dedupe or overwrite legitimate records.
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories
