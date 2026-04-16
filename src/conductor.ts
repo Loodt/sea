@@ -25,6 +25,7 @@ import {
   aggregateReferences,
   normalizeQuestionIds,
   enforceDerivationChains,
+  enforceSourceUrls,
 } from "./knowledge.js";
 import {
   assembleQuestionSelectionPrompt,
@@ -331,6 +332,27 @@ export async function runConductorIteration(
     const downgraded = await enforceDerivationChains(projectDir);
     if (downgraded > 0) {
       console.log(`   ⚠ Downgraded ${downgraded} [DERIVED] finding(s) to [ESTIMATED]: missing derivationChain`);
+    }
+
+    // Enforce [SOURCE] findings must carry a real URL — downgrade to [UNKNOWN] if not.
+    // Bare labels ("sprout-social-2026") and bundle citations previously slipped through.
+    const sourceDowngraded = await enforceSourceUrls(projectDir);
+    if (sourceDowngraded > 0) {
+      console.log(`   ⚠ Downgraded ${sourceDowngraded} [SOURCE] finding(s) to [UNKNOWN]: source URL missing or invalid`);
+      await appendSpan(projectDir, {
+        id: `conductor-${cIterStr}-source-url-missing`,
+        step: "integrate-handoff",
+        parentId: `conductor-${cIterStr}`,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        durationMs: 0,
+        promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+        exitCode: 0, findingsProduced: 0,
+        metadata: {
+          event: "SOURCE_URL_MISSING",
+          downgradedCount: sourceDowngraded,
+        },
+      });
     }
 
     // Aggregate source URLs into references/links.md
@@ -682,12 +704,38 @@ async function selectQuestion(
   const selection = parseQuestionSelection(result.stdout);
 
   if (!selection) {
+    const rateLimit = detectProviderRateLimit(result.stderr);
+    if (rateLimit) {
+      throw new Error(
+        `Provider rate-limited during question selection (provider=${config?.provider ?? "auto"}): ${rateLimit}. ` +
+          `Wait for the quota to reset or top up credits, then resume. Trace: ${path.join("traces", `conductor-${String(conductorIteration).padStart(3, "0")}-select.md`)}`
+      );
+    }
     throw new Error(
-      "Failed to parse question selection from conductor output. Check the trace file."
+      `Failed to parse question selection from conductor output (exit=${result.exitCode}, stdout=${result.stdout.length}B, stderr=${result.stderr.length}B). Check the trace file.`
     );
   }
 
   return selection;
+}
+
+// Detect common provider rate-limit / quota-exhausted patterns in stderr.
+// Returns a short excerpt when matched, null otherwise.
+function detectProviderRateLimit(stderr: string): string | null {
+  if (!stderr) return null;
+  const patterns = [
+    /you['']?ve hit your usage limit[^\n]*/i,
+    /rate[- ]?limit(?:ed)?[^\n]*/i,
+    /quota (?:exceeded|exhausted)[^\n]*/i,
+    /429[^\n]*too many requests[^\n]*/i,
+    /try again (?:at|in) [^\n]+/i,
+    /insufficient[_ ]?quota[^\n]*/i,
+  ];
+  for (const re of patterns) {
+    const m = stderr.match(re);
+    if (m) return m[0].trim().slice(0, 200);
+  }
+  return null;
 }
 
 function parseQuestionSelection(output: string): QuestionSelection | null {

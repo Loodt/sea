@@ -157,6 +157,38 @@ export async function normalizeQuestionIds(projectDir: string): Promise<number> 
 }
 
 /**
+ * Enforce CLAUDE.md rule: [SOURCE] findings must carry a real URL. A bare label like
+ * "sprout-social-2026" or a bundle-citation blob is not a source. Downgrade such findings
+ * to [UNKNOWN] so the trust cascade stays honest and they never graduate to verified.
+ * Returns the number of findings downgraded.
+ */
+export async function enforceSourceUrls(projectDir: string): Promise<number> {
+  let downgraded = 0;
+
+  await atomicUpdateJsonl<Finding>(findingsPath(projectDir), (findings) => {
+    for (const f of findings) {
+      if (f.tag !== "SOURCE") continue;
+      const hasUrl =
+        !!f.source && f.source !== "null" && /^https?:\/\//.test(f.source);
+      if (hasUrl) continue;
+
+      // Preserve the bad source string in the claim so the integrator can fix it later.
+      const badSource = f.source ?? "missing";
+      f.tag = "UNKNOWN";
+      f.source = null;
+      f.claim = f.claim.replace(
+        /^\[SOURCE:[^\]]*\]\s*/i,
+        `[UNKNOWN: source-url-missing (was: ${badSource})] `
+      );
+      downgraded += 1;
+    }
+    return findings;
+  });
+
+  return downgraded;
+}
+
+/**
  * Enforce CLAUDE.md rule: [DERIVED] without a structured derivationChain with ≥1 premise
  * is knowledge debt. Downgrade such findings to [ESTIMATED] so the trust cascade stays honest.
  * Returns the number of findings downgraded.
@@ -342,13 +374,20 @@ export async function graduateFindings(
     );
 
     for (const f of findings) {
-      // SOURCE graduation: confidence >= 0.85, has URL, aged, not refuted
+      // Flagged-for-review findings never auto-graduate — require a human re-check
+      // to clear the review flag before graduation can resume.
+      if (f.needsReview) continue;
+
+      // SOURCE graduation: confidence >= 0.85, has URL, aged, not refuted.
+      // URL must start with http/https — bare labels like "sprout-social-2026"
+      // previously slipped through and auto-graduated to verified.
       if (
         f.status === "provisional" &&
         f.confidence >= 0.85 &&
         f.tag === "SOURCE" &&
         f.source &&
         f.source !== "null" &&
+        /^https?:\/\//.test(f.source) &&
         (currentIteration - f.iteration) >= staleAfter &&
         !refutedClaims.has(f.id)
       ) {

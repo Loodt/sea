@@ -11,6 +11,7 @@ import {
   graduateFindings,
   normalizeQuestionIds,
   enforceDerivationChains,
+  enforceSourceUrls,
 } from "../knowledge.js";
 import type { Finding, Question } from "../types.js";
 
@@ -414,6 +415,41 @@ describe("graduateFindings", () => {
     const count = await graduateFindings(tmpDir, 5, 3);
     expect(count).toBe(0);
   });
+
+  it("rejects SOURCE whose source is a bare label rather than a URL", async () => {
+    const findings = [
+      makeFinding({ confidence: 0.95, tag: "SOURCE", source: "sprout-social-2026", iteration: 1 }),
+    ];
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      JSON.stringify(findings[0]) + "\n",
+      "utf-8"
+    );
+
+    const count = await graduateFindings(tmpDir, 5, 3);
+    expect(count).toBe(0);
+  });
+
+  it("skips findings flagged needsReview even when otherwise eligible", async () => {
+    const findings = [
+      makeFinding({
+        id: "F001",
+        confidence: 0.95,
+        tag: "SOURCE",
+        source: "https://example.com/paper",
+        iteration: 1,
+        needsReview: { reason: "number mismatch with source", flaggedAt: "2026-04-16T00:00:00Z" },
+      }),
+    ];
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      JSON.stringify(findings[0]) + "\n",
+      "utf-8"
+    );
+
+    const count = await graduateFindings(tmpDir, 5, 3);
+    expect(count).toBe(0);
+  });
 });
 
 describe("normalizeQuestionIds", () => {
@@ -537,6 +573,66 @@ describe("enforceDerivationChains", () => {
     );
 
     const downgraded = await enforceDerivationChains(tmpDir);
+    expect(downgraded).toBe(0);
+  });
+});
+
+describe("enforceSourceUrls", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "sea-test-"));
+    await mkdir(path.join(tmpDir, "knowledge"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("downgrades SOURCE findings without a valid URL to UNKNOWN", async () => {
+    const findings = [
+      makeFinding({ id: "F001", tag: "SOURCE", source: "sprout-social-2026", claim: "[SOURCE: sprout-social-2026] Bare label source" }),
+      makeFinding({ id: "F002", tag: "SOURCE", source: "https://example.com/paper", claim: "[SOURCE: example] Real URL" }),
+      makeFinding({ id: "F003", tag: "SOURCE", source: null, claim: "No source" }),
+      makeFinding({ id: "F004", tag: "SOURCE", source: "McKinsey, Salesforce reports, Grubhub case study", claim: "Bundle blob" }),
+      makeFinding({ id: "F005", tag: "DERIVED", source: null, claim: "Unaffected" }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+
+    const downgraded = await enforceSourceUrls(tmpDir);
+    expect(downgraded).toBe(3);
+
+    const content = await readFile(path.join(tmpDir, "knowledge", "findings.jsonl"), "utf-8");
+    const updated = content.trim().split("\n").map((line) => JSON.parse(line) as Finding);
+
+    expect(updated[0].tag).toBe("UNKNOWN");
+    expect(updated[0].source).toBeNull();
+    expect(updated[0].claim).toMatch(/^\[UNKNOWN: source-url-missing \(was: sprout-social-2026\)\]/);
+    expect(updated[1].tag).toBe("SOURCE"); // kept — real URL
+    expect(updated[1].source).toBe("https://example.com/paper");
+    expect(updated[2].tag).toBe("UNKNOWN"); // null source
+    expect(updated[3].tag).toBe("UNKNOWN"); // bundle citation
+    expect(updated[4].tag).toBe("DERIVED"); // unaffected
+  });
+
+  it("returns 0 when all SOURCE findings have valid URLs", async () => {
+    const findings = [
+      makeFinding({ id: "F001", tag: "SOURCE", source: "https://a.com" }),
+      makeFinding({ id: "F002", tag: "SOURCE", source: "http://b.org/paper" }),
+    ];
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+
+    const downgraded = await enforceSourceUrls(tmpDir);
     expect(downgraded).toBe(0);
   });
 });

@@ -141,6 +141,13 @@ export interface Finding {
     assumptions: string[];   // Explicitly stated assumptions
     uncertaintyNote?: string; // What could invalidate this
   };
+  // Needs-review flag: set when the URL resolves but the source content doesn't
+  // fully support the claim (number mismatch, adjacent-topic paper, bundle citation
+  // mis-attributing claims). Blocks auto-graduation until a human re-checks.
+  needsReview?: {
+    reason: string;
+    flaggedAt: string; // ISO timestamp
+  };
   // Removed: quantitative (never populated across 9 projects)
   // Removed: linkedFindings (never populated; wiki relationships serve this function)
   // Removed: humanReviewRequired (never set or checked)
