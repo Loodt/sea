@@ -205,6 +205,22 @@ describe("generateFallbackSummary", () => {
     expect(summary).toContain("# Knowledge Summary");
     expect(summary).toContain("0 findings: 0 verified, 0 provisional, 0 refuted, 0 superseded.");
   });
+
+  it("preserves an existing goal progress section", () => {
+    const findings = [makeFinding({ id: "F123", status: "verified", claim: "Fresh claim" })];
+    const questions = [makeQuestion({ id: "Q001", status: "open", questionType: "design-space", domain: "alpha" })];
+    const prior = [
+      "# Knowledge Summary",
+      "",
+      "## Goal Progress",
+      "1. Example criterion: PARTIAL (`F123`). Missing: something.",
+      "",
+    ].join("\n");
+
+    const summary = generateFallbackSummary(findings, questions, prior);
+    expect(summary).toContain("## Goal Progress");
+    expect(summary).toContain("Example criterion: PARTIAL");
+  });
 });
 
 // ── enforceSummarySize (disk-based) ──
@@ -313,6 +329,47 @@ describe("enforceSummaryFreshness", () => {
 
     const changed = await enforceSummaryFreshness(tmpDir);
     expect(changed).toBe(false);
+  });
+
+  it("refreshes when latest finding IDs drift even if counts are unchanged", async () => {
+    const findings = [
+      makeFinding({ id: "F001", status: "verified", claim: "Older claim", iteration: 1 }),
+      makeFinding({ id: "F002", status: "verified", claim: "Middle claim", iteration: 2 }),
+      makeFinding({ id: "F003", status: "verified", claim: "Newest claim", iteration: 3 }),
+    ];
+    const questions = [makeQuestion({ id: "Q001", status: "open", questionType: "design-space", domain: "alpha" })];
+    const staleSummary = [
+      "# Knowledge Summary",
+      "",
+      "## Store",
+      "3 findings: 3 verified, 0 provisional, 0 refuted, 0 superseded.",
+      "1 questions: 0 resolved, 1 open, 0 exhausted.",
+      "",
+      "## Latest Findings",
+      "- `F000` [SOURCE/verified] stale",
+      "",
+      "## Open Branches",
+      "- `Q001` [design-space] alpha",
+      "",
+    ].join("\n");
+
+    await writeFile(
+      path.join(tmpDir, "knowledge", "findings.jsonl"),
+      findings.map((f) => JSON.stringify(f)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(
+      path.join(tmpDir, "knowledge", "questions.jsonl"),
+      questions.map((q) => JSON.stringify(q)).join("\n") + "\n",
+      "utf-8"
+    );
+    await writeFile(path.join(tmpDir, "knowledge", "summary.md"), staleSummary, "utf-8");
+
+    const changed = await enforceSummaryFreshness(tmpDir);
+    expect(changed).toBe(true);
+
+    const content = await readFile(path.join(tmpDir, "knowledge", "summary.md"), "utf-8");
+    expect(content).toContain("`F003`");
   });
 });
 

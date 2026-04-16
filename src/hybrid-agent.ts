@@ -356,7 +356,7 @@ function tryParseReport(raw: string, selection: QuestionSelection): HybridResult
     const p = JSON.parse(raw);
     if (!p.status) return null;
 
-    const VALID_TYPES: QuestionType[] = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis", "first-principles", "design-space"];
+    const VALID_TYPES: QuestionType[] = ["landscape", "kill-check", "data-hunt", "mechanism", "synthesis", "first-principles", "design-space", "divergence"];
     const qt = VALID_TYPES.includes(p.questionType) ? p.questionType : selection.questionType;
 
     return {

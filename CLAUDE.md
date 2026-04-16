@@ -1,7 +1,7 @@
 # SEA Conductor
 
 ## State
-- Conductor version: v051 (v050 synthesis-velocity mandate VALIDATED: iter 9 LQ001 +36f, 3q resolved, 1 new = net -2q, no cargo-cult. Iter 10-11 natural rotation: mechanism LQ016 +18f, landscape close LQ004 +40f across 4 inner iters. 10-disp window local-llm-stack iter 2-11: kill-check 5, synthesis/mechanism/first-principles/design-space/landscape 1 each, avg 22f/disp, 1 successful exhaustion (LQ013 strategy-limit +31f). All Type-debt mandates cleared (reasoning at iter 6, synthesis at iter 9, mechanism at iter 10). v051 = hold v050; composite healthy, no new dysfunction. Next synthesis eligible iter 14 per cadence (5-disp gap when >100 findings). Standing rollback trigger: next synthesis creates ≥2 new questions without resolving any, OR Type-debt mandate fires but misses clearance criterion.)
+- Conductor version: v052 (hold v050 velocity mandate; v052 = size consolidation, no behavioral change. 10-disp window local-llm-stack iter 5-14: all ≥5f, net -1q, rotation balanced (kill-check 3, mechanism 2, landscape 2, synthesis/first-principles/data-hunt 1 each, 0 design-space), 8 answered / 1 killed / 1 beneficially-exhausted. Synthesis iter 9 resolved 3q -2q net — velocity mandate validated. All Type-debt mandates cleared. Standing rollback: next synthesis creates ≥2q without resolving any, OR Type-debt mandate fires but misses clearance. Detailed dispatch-pattern history in `dispatch-patterns.md`.)
 - Outer loop: select-question → create-expert → expert-loop → integrate-handoff (4 LLM calls per iteration)
 - Knowledge layer: findings.jsonl + questions.jsonl + summary.md per project
 - Multi-provider: `--provider`, `SEA_PROVIDER`, or harness auto-detect. Config in `types.ts`.
@@ -107,12 +107,8 @@ Code-required gaps:
 2. **Observability** (MEDIUM) — PERSISTENCE_GAP, HOLLOW_ANSWER, DISPATCH_GAP, EXHAUSTED_UNRESOLVED: emit consistently.
 
 ### Closed
-- ~~**Findings store snapshot/restore**~~ — `src/store-snapshot.ts` + wired into `conductor.ts` before integrate. Auto-restore on zero-out, >50% loss, or verified removal. `STORE_CLOBBER_RESTORED` span logs full diff.
-- ~~**Type-creation enforcement + convergence caps**~~ — `src/question-caps.ts` runs post-integration: per-type queue cap (block when open > dispatch cap), iter-boundary caps (12/15/18/20), per-dispatch new-question cap (landscape ≤5, other ≤3). `QUESTION_CAP_TRIMMED` span per trim.
-- ~~**Same-type cap + re-dispatch guard**~~ — `src/selection-guards.ts` runs pre-dispatch: non-open re-dispatch swap, re-dispatch type-mismatch correction (scoped to questions with prior metric only), same-type 3rd-consecutive swap. `SELECTION_GUARD_INTERVENED` span per intervention.
-- ~~**Lineage writer**~~ — `appendLineageEntry` in `conductor.ts` runs after every iteration's metric write (changeType derived from outcome: progress/no-change/exhaustion/strategic/infrastructure/narrowed) and after meta-evolution (target = playbook path). Was prompt-only and never fired in conductor architecture (no separate evolve step). Historical iters of jarvis-architecture have no lineage; future iters populate `lineage/changes.jsonl`.
-- ~~**SOURCE-URL graduation gate**~~ — `graduateFindings` in `src/knowledge.ts` now requires `/^https?:\/\//` on `source`; `enforceSourceUrls` downgrades `[SOURCE]` without a valid URL to `[UNKNOWN]` at integration time (parallel to `enforceDerivationChains`). `needsReview` field on `Finding` blocks graduation for URL-resolves-but-claim-mismatch cases. `SOURCE_URL_MISSING` span per downgrade.
-- ~~**SOURCE fast-track graduation**~~ — Deprioritized (not shipped). See EXP-035: ≥0.90 confidence 2-dispatch fast-track offers only 1-dispatch speedup, creates a confidence cliff at 0.90 that LLM scoring isn't calibrated for, and undercuts the newly-tightened graduation gate. No project has shown verification lag as a blocker. Revive with evidence if that changes.
+Shipped code (details in CLAUDE-history/): findings store snapshot/restore (`src/store-snapshot.ts`, `STORE_CLOBBER_RESTORED`), type-creation + convergence caps (`src/question-caps.ts`, `QUESTION_CAP_TRIMMED`), same-type + re-dispatch guards (`src/selection-guards.ts`, `SELECTION_GUARD_INTERVENED`), lineage writer (`appendLineageEntry`), SOURCE-URL graduation gate (`enforceSourceUrls`, `SOURCE_URL_MISSING`).
+Deprioritized: SOURCE fast-track graduation (EXP-035 — 1-disp speedup, confidence cliff at 0.90, undercuts graduation gate; revive with evidence of verification-lag blocker).
 
 ## Safety Rails (IMMUTABLE — meta-evolution MUST preserve this section verbatim)
 - Never delete any file in *-history/ directories

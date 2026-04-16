@@ -246,7 +246,7 @@ export async function enforceSummarySize(projectDir: string): Promise<boolean> {
 
   const findings = await readFindings(projectDir);
   const questions = await readQuestions(projectDir);
-  const fallback = generateFallbackSummary(findings, questions);
+  const fallback = generateFallbackSummary(findings, questions, content);
 
   const fallbackBytes = Buffer.byteLength(fallback, "utf-8");
   const final = fallbackBytes <= SUMMARY_MAX_BYTES
@@ -263,6 +263,16 @@ function truncateSummaryClaim(claim: string, maxLen: number = 140): string {
   return singleLine.slice(0, Math.max(0, maxLen - 3)).trimEnd() + "...";
 }
 
+function extractMarkdownSection(content: string, heading: string): string | null {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const start = normalized.indexOf(`${heading}\n`);
+  if (start === -1) return null;
+
+  const next = normalized.indexOf("\n## ", start + heading.length + 1);
+  const end = next === -1 ? normalized.length : next;
+  return normalized.slice(start, end).trimEnd();
+}
+
 function summaryIsFresh(
   summary: string,
   findings: Finding[],
@@ -275,6 +285,7 @@ function summaryIsFresh(
   const resolvedQuestions = questions.filter((q) => q.status === "resolved");
   const exhaustedQuestions = questions.filter((q) => q.status === "exhausted");
 
+  const latestFindings = findings.slice(-3);
   const findingsFragment = `${counts.total} findings`;
   const questionsFragment = `${resolvedQuestions.length} resolved, ${openQuestions.length} open, ${exhaustedQuestions.length} exhausted`;
 
@@ -282,7 +293,8 @@ function summaryIsFresh(
     return false;
   }
 
-  return openQuestions.every((q) => summary.includes(q.id));
+  return openQuestions.every((q) => summary.includes(q.id))
+    && latestFindings.every((f) => summary.includes(f.id));
 }
 
 /**
@@ -298,7 +310,7 @@ export async function enforceSummaryFreshness(projectDir: string): Promise<boole
     return false;
   }
 
-  const fallback = generateFallbackSummary(findings, questions);
+  const fallback = generateFallbackSummary(findings, questions, current);
   const bytes = Buffer.byteLength(fallback, "utf-8");
   const final = bytes <= SUMMARY_MAX_BYTES
     ? fallback
@@ -314,13 +326,15 @@ export async function enforceSummaryFreshness(projectDir: string): Promise<boole
  */
 export function generateFallbackSummary(
   findings: Finding[],
-  questions: Question[]
+  questions: Question[],
+  existingSummary: string = ""
 ): string {
   const openQs = questions.filter((q) => q.status === "open");
   const resolvedQs = questions.filter((q) => q.status === "resolved");
   const exhaustedQs = questions.filter((q) => q.status === "exhausted");
   const counts = findingCounts(findings);
   const latestFindings = findings.slice(-3).reverse();
+  const preservedGoalProgress = extractMarkdownSection(existingSummary, "## Goal Progress");
 
   const lines: string[] = [
     "# Knowledge Summary",
@@ -345,6 +359,11 @@ export function generateFallbackSummary(
       lines.push(`- \`${q.id}\` [${q.questionType}] ${q.domain}`);
     }
     if (openQs.length > 10) lines.push(`- ... and ${openQs.length - 10} more`);
+    lines.push("");
+  }
+
+  if (preservedGoalProgress) {
+    lines.push(preservedGoalProgress);
     lines.push("");
   }
 
