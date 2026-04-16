@@ -19,16 +19,26 @@ const LIBRARY_FILE = "expert-library/library.jsonl";
 
 export async function readLibrary(projectDir: string): Promise<LibraryEntry[]> {
   const filePath = path.join(projectDir, LIBRARY_FILE);
+  let content: string;
   try {
-    const content = await readFile(filePath, "utf-8");
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as LibraryEntry);
-  } catch {
-    return [];
+    content = await readFile(filePath, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw new Error(`readLibrary: failed to read ${filePath}: ${(err as Error).message}`);
   }
+  if (!content.trim()) return [];
+  const lines = content.trim().split("\n").filter(Boolean);
+  const out: LibraryEntry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      out.push(JSON.parse(lines[i]) as LibraryEntry);
+    } catch (err: unknown) {
+      throw new Error(
+        `readLibrary: parse error in ${filePath} at line ${i + 1}: ${(err as Error).message}`
+      );
+    }
+  }
+  return out;
 }
 
 export async function appendLibraryEntry(projectDir: string, entry: LibraryEntry): Promise<void> {

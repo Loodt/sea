@@ -2,6 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { readSummary, readFindings, readQuestions, findingCounts } from "./knowledge.js";
+import { readConductorMetrics } from "./metrics.js";
 import type { ExpertHandoff, Question, Finding, EngineeringType, Provider } from "./types.js";
 import { conductorFile, conductorFileCandidates, ENGINEERING_TYPE_PRIORITY } from "./types.js";
 
@@ -189,24 +190,20 @@ export async function assembleQuestionSelectionPrompt(
     : "none";
 
   // Dispatch-type history for type diversity enforcement
-  const metricsRaw = await safeRead(path.join(projectDir, "metrics", "conductor-metrics.jsonl"));
+  const metricsRows = await readConductorMetrics(projectDir);
   const typeCounts: Record<string, number> = {};
-  if (metricsRaw.trim()) {
-    for (const line of metricsRaw.trim().split("\n")) {
-      try { const m = JSON.parse(line); if (m.questionType) typeCounts[m.questionType] = (typeCounts[m.questionType] || 0) + 1; } catch { /* skip */ }
-    }
+  for (const m of metricsRows) {
+    if (m.questionType) typeCounts[m.questionType] = (typeCounts[m.questionType] || 0) + 1;
   }
   const typeHistoryText = Object.keys(typeCounts).length > 0
     ? `Dispatches by type: ${Object.entries(typeCounts).map(([t, c]) => `${t}: ${c}`).join(", ")}`
     : "";
 
   // Consecutive same-type sequence for hard cap enforcement
-  const recentDispatchTypes: string[] = [];
-  if (metricsRaw.trim()) {
-    for (const line of metricsRaw.trim().split("\n").slice(-3)) {
-      try { const m = JSON.parse(line); if (m.questionType) recentDispatchTypes.push(m.questionType); } catch { /* skip */ }
-    }
-  }
+  const recentDispatchTypes: string[] = metricsRows
+    .slice(-3)
+    .filter((m) => m.questionType)
+    .map((m) => m.questionType as string);
   const lastTwoTypes = recentDispatchTypes.slice(-2);
   const sameTypeBlock = lastTwoTypes.length === 2 && lastTwoTypes[0] === lastTwoTypes[1]
     ? `\n🛑 SAME-TYPE CAP: Last 2 dispatches were both "${lastTwoTypes[0]}". You MUST select a DIFFERENT question type. This is a HARD constraint — selecting "${lastTwoTypes[0]}" again will waste a dispatch.`

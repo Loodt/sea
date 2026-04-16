@@ -164,16 +164,7 @@ export async function appendScore(
  */
 export async function readScores(projectDir: string): Promise<Score[]> {
   const filePath = path.join(projectDir, "metrics", "scores.jsonl");
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Score);
-  } catch {
-    return [];
-  }
+  return readJsonlStrict<Score>(filePath);
 }
 
 /**
@@ -213,32 +204,42 @@ export async function appendSpan(projectDir: string, span: Span): Promise<void> 
  */
 export async function readSpans(projectDir: string): Promise<Span[]> {
   const filePath = path.join(projectDir, "metrics", "spans.jsonl");
-  try {
-    const content = await readFile(filePath, "utf-8");
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as Span);
-  } catch {
-    return [];
-  }
+  return readJsonlStrict<Span>(filePath);
 }
 
 // ── Conductor Metrics ──
 
 export async function readConductorMetrics(projectDir: string): Promise<ConductorMetric[]> {
   const filePath = path.join(projectDir, "metrics", "conductor-metrics.jsonl");
+  return readJsonlStrict<ConductorMetric>(filePath);
+}
+
+/**
+ * Shared jsonl reader: ENOENT → [] (fresh store), any other IO/parse failure
+ * throws with file + line context. No silent swallow — corruption must halt
+ * the pipeline so the clobber-guards upstream can surface it.
+ */
+async function readJsonlStrict<T>(filePath: string): Promise<T[]> {
+  let content: string;
   try {
-    const content = await readFile(filePath, "utf-8");
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as ConductorMetric);
-  } catch {
-    return [];
+    content = await readFile(filePath, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw new Error(`readJsonlStrict: failed to read ${filePath}: ${(err as Error).message}`);
   }
+  if (!content.trim()) return [];
+  const lines = content.trim().split("\n").filter(Boolean);
+  const out: T[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      out.push(JSON.parse(lines[i]) as T);
+    } catch (err: unknown) {
+      throw new Error(
+        `readJsonlStrict: parse error in ${filePath} at line ${i + 1}: ${(err as Error).message}`
+      );
+    }
+  }
+  return out;
 }
 
 // ── Convergence Detection ──

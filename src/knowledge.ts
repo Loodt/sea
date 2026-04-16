@@ -21,17 +21,26 @@ function summaryPath(projectDir: string): string {
 // ── Generic JSONL helpers ──
 
 async function readJsonl<T>(filePath: string): Promise<T[]> {
+  let content: string;
   try {
-    const content = await readFile(filePath, "utf-8");
-    if (!content.trim()) return [];
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as T);
-  } catch {
-    return [];
+    content = await readFile(filePath, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw new Error(`readJsonl: failed to read ${filePath}: ${(err as Error).message}`);
   }
+  if (!content.trim()) return [];
+  const lines = content.trim().split("\n").filter(Boolean);
+  const out: T[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      out.push(JSON.parse(lines[i]) as T);
+    } catch (err: unknown) {
+      throw new Error(
+        `readJsonl: parse error in ${filePath} at line ${i + 1}: ${(err as Error).message}`
+      );
+    }
+  }
+  return out;
 }
 
 async function appendJsonl<T>(filePath: string, entry: T): Promise<void> {

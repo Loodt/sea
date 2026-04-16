@@ -26,17 +26,26 @@ export async function readGlobalExpertLibrary(
   globalRoot?: string
 ): Promise<GlobalExpertEntry[]> {
   const mp = manifestPath(globalRoot ?? defaultGlobalRoot());
+  let content: string;
   try {
-    const content = await readFile(mp, "utf-8");
-    if (!content.trim()) return [];
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as GlobalExpertEntry);
-  } catch {
-    return [];
+    content = await readFile(mp, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw new Error(`readGlobalExpertLibrary: failed to read ${mp}: ${(err as Error).message}`);
   }
+  if (!content.trim()) return [];
+  const lines = content.trim().split("\n").filter(Boolean);
+  const out: GlobalExpertEntry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      out.push(JSON.parse(lines[i]) as GlobalExpertEntry);
+    } catch (err: unknown) {
+      throw new Error(
+        `readGlobalExpertLibrary: parse error in ${mp} at line ${i + 1}: ${(err as Error).message}`
+      );
+    }
+  }
+  return out;
 }
 
 async function writeManifest(

@@ -41,17 +41,27 @@ function manifestFile(root: string): string {
 // ── Manifest I/O ──
 
 async function readManifestEntries(root: string): Promise<GlobalEntry[]> {
+  const file = manifestFile(root);
+  let content: string;
   try {
-    const content = await readFile(manifestFile(root), "utf-8");
-    if (!content.trim()) return [];
-    return content
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as GlobalEntry);
-  } catch {
-    return [];
+    content = await readFile(file, "utf-8");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw new Error(`readManifestEntries: failed to read ${file}: ${(err as Error).message}`);
   }
+  if (!content.trim()) return [];
+  const lines = content.trim().split("\n").filter(Boolean);
+  const out: GlobalEntry[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    try {
+      out.push(JSON.parse(lines[i]) as GlobalEntry);
+    } catch (err: unknown) {
+      throw new Error(
+        `readManifestEntries: parse error in ${file} at line ${i + 1}: ${(err as Error).message}`
+      );
+    }
+  }
+  return out;
 }
 
 async function writeManifest(root: string, entries: GlobalEntry[]): Promise<void> {
