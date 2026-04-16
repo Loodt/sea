@@ -76,12 +76,13 @@ Terminal
 
 When a project's knowledge store is mature (≥5 verified findings in a domain), the conductor can dispatch **reasoning experts** instead of research experts. These derive novel conclusions from existing findings rather than searching the web.
 
-Two reasoning question types:
+Three reasoning question types:
 
 | Type | What it does | Iter cap | Search budget |
 |------|-------------|----------|---------------|
 | `first-principles` | Derive from axioms + verified findings (cost models, mechanism predictions, feasibility calculations) | 3 | 1 (validation only) |
 | `design-space` | Map solution space from constraints, generate ≥3 approaches with trade-off analysis | 4 | 2 (validation only) |
+| `divergence` *(EXPERIMENTAL)* | Structured white-space provocation at governing-principle level — Subtraction + Integrative techniques ported from MAESTRO | 3 | 4 |
 
 Reasoning experts produce `[DERIVED]` findings with a **derivation chain** — machine-readable premises, method, assumptions, and uncertainty notes:
 
@@ -133,6 +134,13 @@ The conductor learns meta-lessons slowly across projects. Expert personas adapt 
 | 9 | **First-principles reasoning** | Derive novel conclusions from verified findings instead of web search. Derivation chains with trust cascade. |
 | 9 | **Design-space analysis** | Map solution spaces from constraints. Generate 3+ approaches with trade-off analysis. |
 | 9 | **Trust cascade graduation** | DERIVED findings only graduate when ALL premises are verified. Prevents hallucination-as-reasoning. |
+| Infra | **Store clobber guard** | Pre-integration snapshot; auto-restore on zero-out, >50% loss, or verified-finding removal. Closes iter-18 clobber class of bugs. |
+| Infra | **Selection guards** | Pre-dispatch code enforcement: non-open re-dispatch swap, type-mismatch correction, 3rd-consecutive same-type block. |
+| Infra | **Question caps** | Post-integration trim: per-type queue cap, iter-boundary caps (12/15/18/20), per-dispatch new-question cap. |
+| Infra | **Lineage writer** | Deterministic `lineage/changes.jsonl` entry every iteration — no silent drift. |
+| Infra | **SOURCE-URL gate** | `[SOURCE]` findings downgrade to `[UNKNOWN]` if no valid http(s) URL; `needsReview` blocks graduation on URL/claim mismatch. |
+| Infra | **Summary freshness** | Deterministic store-derived fallback when `summary.md` is stale or missing. |
+| Exp | **Divergence question type** | Ported from MAESTRO — structured white-space provocation (Subtraction + Integrative) at governing-principle level. EXPERIMENTAL. |
 
 ## Quick start
 
@@ -204,6 +212,7 @@ sea status [project]                 # show current state and scores
 sea history <project>                # evolution timeline with scores
 sea wiki <project>                   # generate/update engineering wiki from findings
 sea global-wiki [project]            # promote verified findings to cross-project wiki
+sea global-experts [project]         # promote high-scoring expert personas across projects
 sea audit <project>                  # integrity audit: findings, wiki, questions, convergence
 sea rollback <project> [version]     # restore persona to earlier version
 sea rollback conductor [version]     # restore conductor to earlier version
@@ -239,13 +248,17 @@ sea/
     integrity.md               10 truthfulness axioms (evolvable)
   templates/
     expert-creation-framework.md   6-section persona anatomy
-  src/                         TypeScript CLI (~5,500 LOC)
+  src/                         TypeScript CLI
     cli.ts                     command dispatcher
     conductor.ts               outer loop orchestration
     expert-loop.ts             inner loop iteration
     expert-factory.ts          persona creation + library lookup
     expert-library.ts          persona scoring and reuse
-    knowledge.ts               findings + questions JSONL store
+    global-expert-library.ts   cross-project persona promotion
+    selection-guards.ts        pre-dispatch: non-open, type-mismatch, same-type cap
+    question-caps.ts           post-integration: type queue / iter-boundary / per-dispatch caps
+    store-snapshot.ts          pre-integration snapshot + clobber auto-restore
+    knowledge.ts               findings + questions JSONL store + graduation gates
     wiki.ts                    engineering wiki generator (per-project)
     global-wiki.ts             cross-project wiki promotion/seeding
     audit.ts                   integrity auditor (findings, wiki, questions)
@@ -256,9 +269,11 @@ sea/
     loop.ts                    pipeline iteration flow
     safety.ts                  regression detection + rollback
     versioner.ts               snapshot/restore
+    file-lock.ts               atomic JSONL read/write via proper-lockfile
     discovery.ts               interactive project setup
     integrity.ts               knowledge store validation
     pattern-filter.ts          domain/question-type filtering for patterns
+    hybrid-agent.ts            legacy v035 hybrid pipeline (retained for back-compat)
     types.ts                   all interfaces + defaults
   global-wiki/                 cross-project verified findings (gitignored)
   projects/
@@ -321,7 +336,7 @@ If the rolling 3-iteration average drops >15%, the persona auto-rollbacks to the
 - **Persona is strategy.** 80% of research quality comes from expert persona fit. The creation framework is the core investment.
 - **Exhaustion is knowledge.** When a question exhausts, the negative result becomes a structured finding documenting what was searched.
 - **Structure over rules.** Constraints are architectural (iteration caps, separate scoring model, staged workflow) not instructional.
-- **Kill fast, invest slow.** Question types have iteration caps (synthesis: 2, first-principles: 3, design-space: 4, others: 5) to prevent wasted iterations.
+- **Kill fast, invest slow.** Question types have iteration caps (first-principles: 3, divergence: 3, design-space: 4, others: 5) to prevent wasted iterations.
 - **Think, don't just search.** When the knowledge store is rich enough, reasoning experts derive novel conclusions from verified findings instead of dispatching more web searchers.
 - **Learn bidirectionally.** Both failure patterns AND success patterns feed into expert creation.
 - **Knowledge compounds.** Verified findings promote to a global wiki that seeds new projects.
