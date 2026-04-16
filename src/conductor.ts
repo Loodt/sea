@@ -83,7 +83,8 @@ function sleep(ms: number): Promise<void> {
  */
 export async function runConductorIteration(
   projectName: string,
-  config: ConductorConfig = DEFAULT_CONDUCTOR_CONFIG
+  config: ConductorConfig = DEFAULT_CONDUCTOR_CONFIG,
+  forceQuestionId?: string
 ): Promise<{ conductorIteration: number; handoff: ExpertHandoff }> {
   const projectDir = path.join(SEA_ROOT, "projects", projectName);
   const state = await readConductorState(projectDir);
@@ -108,35 +109,39 @@ export async function runConductorIteration(
   const dispatchStartTime = new Date().toISOString();
 
   // ═══ CALL 1: Question Selection ═══
-  console.log("📋 SELECT — choosing highest-value question...");
-  const selectStart = Date.now();
-  const rawSelection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
-  await appendSpan(projectDir, {
-    id: `conductor-${cIterStr}-select`,
-    step: "select-question",
-    parentId: `conductor-${cIterStr}`,
-    startTime: new Date(selectStart).toISOString(),
-    endTime: new Date().toISOString(),
-    durationMs: Date.now() - selectStart,
-    promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
-    exitCode: 0, findingsProduced: 0,
-  });
-
-  // Pre-dispatch selection guards: non-open re-dispatch, re-dispatch type-mismatch,
-  // same-type cap. Converts prompt rules (CLAUDE.md) into code enforcement.
+  // priorMetrics is used by both the selector-guard path and the post-integration
+  // question-cap enforcement, so read once before the override branch.
   const priorMetrics = await readConductorMetrics(projectDir);
-  const recentTypes = priorMetrics
-    .slice(-3)
-    .reverse()
-    .map((m) => m.questionType)
-    .filter((t): t is QuestionType => !!t);
-  const allQuestionsForGuards = await readQuestions(projectDir);
-  const guardResult = applySelectionGuards(rawSelection, allQuestionsForGuards, recentTypes, priorMetrics);
-  const selection = guardResult.selection;
-  for (const intervention of guardResult.interventions) {
-    console.log(`   ⚠ ${intervention.rule}: ${intervention.reason}`);
+  let selection: QuestionSelection;
+  if (forceQuestionId) {
+    // Manual override: bypass selector LLM call and selection guards.
+    // Used when the selector is structurally unable to pick the intended
+    // question (e.g. infrastructure debt #1 — empirical-gate exclusion
+    // violated, or a specific branch needs force-closing).
+    console.log(`📋 SELECT — manual override (--question ${forceQuestionId})`);
+    const allQs = await readQuestions(projectDir);
+    const target = allQs.find((q) => q.id === forceQuestionId);
+    if (!target) {
+      throw new Error(`--question ${forceQuestionId}: question not found in store`);
+    }
+    if (target.status !== "open") {
+      throw new Error(`--question ${forceQuestionId}: status is "${target.status}", must be "open"`);
+    }
+    if (!target.questionType) {
+      throw new Error(`--question ${forceQuestionId}: questionType is missing on the question record`);
+    }
+    const qType = target.questionType;
+    selection = {
+      questionId: target.id,
+      question: target.question,
+      reasoning: `Manual dispatch via --question ${forceQuestionId} (selector bypassed)`,
+      relevantFindingIds: [],
+      suggestedExpertType: `${target.domain} ${qType} specialist`,
+      estimatedIterations: QUESTION_TYPE_ITERATION_CAP[qType] ?? config.maxExpertIterations,
+      questionType: qType,
+    };
     await appendSpan(projectDir, {
-      id: `conductor-${cIterStr}-guard-${intervention.rule}`,
+      id: `conductor-${cIterStr}-select`,
       step: "select-question",
       parentId: `conductor-${cIterStr}`,
       startTime: new Date().toISOString(),
@@ -144,16 +149,55 @@ export async function runConductorIteration(
       durationMs: 0,
       promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
       exitCode: 0, findingsProduced: 0,
-      metadata: {
-        event: "SELECTION_GUARD_INTERVENED",
-        rule: intervention.rule,
-        originalQuestionId: intervention.originalQuestionId,
-        originalType: intervention.originalType,
-        correctedQuestionId: intervention.correctedQuestionId,
-        correctedType: intervention.correctedType,
-        reason: intervention.reason,
-      },
+      metadata: { event: "SELECTOR_MANUAL_OVERRIDE", forcedQuestionId: forceQuestionId },
     });
+  } else {
+    console.log("📋 SELECT — choosing highest-value question...");
+    const selectStart = Date.now();
+    const rawSelection = await selectQuestion(projectDir, cIter, state.questionsExhausted, config);
+    await appendSpan(projectDir, {
+      id: `conductor-${cIterStr}-select`,
+      step: "select-question",
+      parentId: `conductor-${cIterStr}`,
+      startTime: new Date(selectStart).toISOString(),
+      endTime: new Date().toISOString(),
+      durationMs: Date.now() - selectStart,
+      promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+      exitCode: 0, findingsProduced: 0,
+    });
+
+    // Pre-dispatch selection guards: non-open re-dispatch, re-dispatch type-mismatch,
+    // same-type cap. Converts prompt rules (CLAUDE.md) into code enforcement.
+    const recentTypes = priorMetrics
+      .slice(-3)
+      .reverse()
+      .map((m) => m.questionType)
+      .filter((t): t is QuestionType => !!t);
+    const allQuestionsForGuards = await readQuestions(projectDir);
+    const guardResult = applySelectionGuards(rawSelection, allQuestionsForGuards, recentTypes, priorMetrics);
+    selection = guardResult.selection;
+    for (const intervention of guardResult.interventions) {
+      console.log(`   ⚠ ${intervention.rule}: ${intervention.reason}`);
+      await appendSpan(projectDir, {
+        id: `conductor-${cIterStr}-guard-${intervention.rule}`,
+        step: "select-question",
+        parentId: `conductor-${cIterStr}`,
+        startTime: new Date().toISOString(),
+        endTime: new Date().toISOString(),
+        durationMs: 0,
+        promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+        exitCode: 0, findingsProduced: 0,
+        metadata: {
+          event: "SELECTION_GUARD_INTERVENED",
+          rule: intervention.rule,
+          originalQuestionId: intervention.originalQuestionId,
+          originalType: intervention.originalType,
+          correctedQuestionId: intervention.correctedQuestionId,
+          correctedType: intervention.correctedType,
+          reason: intervention.reason,
+        },
+      });
+    }
   }
 
   console.log(`   ✓ Selected: ${selection.questionId} — ${truncateLine(selection.question, 60)}`);

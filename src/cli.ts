@@ -102,6 +102,7 @@ program
   .description("Run a single conductor iteration (select question, create expert, dispatch, integrate)")
   .option("-e, --expert-max <iterations>", "Maximum expert inner iterations", "5")
   .option("--evaluate-model <model>", "Use a different model for evaluation (Axiom 1)")
+  .option("--question <id>", "Force dispatch on a specific open question (bypass selector + guards)")
   .action(async (project: string, opts) => {
     const config: ConductorConfig = {
       ...DEFAULT_CONDUCTOR_CONFIG,
@@ -109,7 +110,7 @@ program
       provider: resolveProvider(),
       ...(opts.evaluateModel ? { evaluateModel: opts.evaluateModel } : {}),
     };
-    await runConductorIteration(project, config);
+    await runConductorIteration(project, config, opts.question);
   });
 
 // ── sea status [project] ──
