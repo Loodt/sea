@@ -14,10 +14,18 @@ import {
 } from "./store-snapshot.js";
 import { applySelectionGuards } from "./selection-guards.js";
 import { applyQuestionCaps } from "./question-caps.js";
+import {
+  evaluateMandates,
+  buildMandateQuestion,
+  applyMandateHardBlock,
+  mandateAutocreateEnabled,
+  mandateHardBlockEnabled,
+} from "./type-debt-mandates.js";
 import { readConductorMetrics } from "./metrics.js";
 import {
   readFindings,
   readQuestions,
+  appendQuestion,
   updateQuestion,
   graduateFindings,
   enforceSummarySize,
@@ -112,6 +120,71 @@ export async function runConductorIteration(
   // priorMetrics is used by both the selector-guard path and the post-integration
   // question-cap enforcement, so read once before the override branch.
   const priorMetrics = await readConductorMetrics(projectDir);
+
+  // Pre-selection: evaluate type-debt mandates (infra-debt #3 — converting
+  // CLAUDE.md boosted priors into code). If eligible AND no open question of
+  // the mandated type exists AND SEA_MANDATE_AUTOCREATE=1, synthesise one
+  // before the selector runs so it has something to pick.
+  const findingsForMandate = await readFindings(projectDir);
+  const questionsForMandate = await readQuestions(projectDir);
+  const mandate = evaluateMandates(
+    findingsForMandate,
+    questionsForMandate,
+    priorMetrics,
+    cIter
+  );
+  if (mandate.eligible) {
+    console.log(`🎯 MANDATE — ${mandate.reason} eligible (${mandate.explanation})`);
+    if (!mandate.hasOpenOfType && mandateAutocreateEnabled()) {
+      const generated = buildMandateQuestion(
+        mandate,
+        findingsForMandate,
+        questionsForMandate,
+        cIter
+      );
+      if (generated) {
+        await appendQuestion(projectDir, generated);
+        console.log(`   ✓ Auto-created ${generated.id} [${generated.questionType}] for mandate`);
+        await appendSpan(projectDir, {
+          id: `conductor-${cIterStr}-mandate-autocreated`,
+          step: "select-question",
+          parentId: `conductor-${cIterStr}`,
+          startTime: new Date().toISOString(),
+          endTime: new Date().toISOString(),
+          durationMs: 0,
+          promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+          exitCode: 0, findingsProduced: 0,
+          metadata: {
+            event: "MANDATE_AUTOCREATED",
+            mandateType: mandate.type,
+            mandateReason: mandate.reason,
+            questionId: generated.id,
+          },
+        });
+        // Refresh local snapshot so the mandate's hasOpenOfType view is correct
+        // for downstream hard-block logic.
+        mandate.hasOpenOfType = true;
+      }
+    }
+    await appendSpan(projectDir, {
+      id: `conductor-${cIterStr}-mandate-evaluated`,
+      step: "select-question",
+      parentId: `conductor-${cIterStr}`,
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      durationMs: 0,
+      promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+      exitCode: 0, findingsProduced: 0,
+      metadata: {
+        event: "MANDATE_EVALUATED",
+        mandateType: mandate.type,
+        mandateReason: mandate.reason,
+        hasOpenOfType: mandate.hasOpenOfType,
+        explanation: mandate.explanation,
+      },
+    });
+  }
+
   let selection: QuestionSelection;
   if (forceQuestionId) {
     // Manual override: bypass selector LLM call and selection guards.
@@ -197,6 +270,69 @@ export async function runConductorIteration(
           reason: intervention.reason,
         },
       });
+    }
+
+    // Mandate post-selection: SKIPPED observability + optional hard-block.
+    // Runs after standard selection guards so the mandate sees the final
+    // (guard-corrected) type. Hard-block respects same-type-cap via recentTypes.
+    if (mandate.eligible && mandate.type) {
+      if (mandateHardBlockEnabled() && mandate.hasOpenOfType) {
+        const questionsNow = await readQuestions(projectDir);
+        const mandateOverride = applyMandateHardBlock(
+          mandate, selection, questionsNow, recentTypes
+        );
+        if (mandateOverride) {
+          console.log(`   🛡 MANDATE_HARDBLOCK: ${mandateOverride.explanation}`);
+          selection = {
+            ...selection,
+            questionId: mandateOverride.correctedQuestionId,
+            questionType: mandateOverride.correctedType,
+            question:
+              questionsNow.find((q) => q.id === mandateOverride.correctedQuestionId)
+                ?.question ?? selection.question,
+          };
+          await appendSpan(projectDir, {
+            id: `conductor-${cIterStr}-mandate-hardblocked`,
+            step: "select-question",
+            parentId: `conductor-${cIterStr}`,
+            startTime: new Date().toISOString(),
+            endTime: new Date().toISOString(),
+            durationMs: 0,
+            promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+            exitCode: 0, findingsProduced: 0,
+            metadata: {
+              event: "MANDATE_HARDBLOCKED",
+              mandateType: mandateOverride.mandateType,
+              mandateReason: mandateOverride.mandateReason,
+              originalQuestionId: mandateOverride.originalQuestionId,
+              originalType: mandateOverride.originalType,
+              correctedQuestionId: mandateOverride.correctedQuestionId,
+              correctedType: mandateOverride.correctedType,
+              explanation: mandateOverride.explanation,
+            },
+          });
+        }
+      }
+      if (selection.questionType !== mandate.type) {
+        console.log(`   ⚠ MANDATE_SKIPPED: selector picked ${selection.questionType} despite ${mandate.reason} eligibility`);
+        await appendSpan(projectDir, {
+          id: `conductor-${cIterStr}-mandate-skipped`,
+          step: "select-question",
+          parentId: `conductor-${cIterStr}`,
+          startTime: new Date().toISOString(),
+          endTime: new Date().toISOString(),
+          durationMs: 0,
+          promptChars: 0, outputChars: 0, promptTokensEst: 0, outputTokensEst: 0,
+          exitCode: 0, findingsProduced: 0,
+          metadata: {
+            event: "MANDATE_SKIPPED",
+            mandateType: mandate.type,
+            mandateReason: mandate.reason,
+            selectedType: selection.questionType,
+            selectedQuestionId: selection.questionId,
+          },
+        });
+      }
     }
   }
 
