@@ -10,22 +10,34 @@ import {
   readScores,
 } from "./metrics.js";
 import { checkAndRollback, advanceIteration } from "./safety.js";
-import { initKnowledge, readFindings, readQuestions, informationGain } from "./knowledge.js";
+import {
+  initKnowledge,
+  readFindings,
+  readQuestions,
+  informationGain,
+  captureIterationBaseline,
+  readIterationBaseline,
+} from "./knowledge.js";
 import { appendSpan } from "./metrics.js";
 import { existsSync } from "node:fs";
 import type { ProjectState, LoopConfig, PipelineStep, Score, Span, Provider } from "./types.js";
 import { DEFAULT_LOOP_CONFIG, padVersion, conductorFile, conductorFileCandidates } from "./types.js";
 
-const SEA_ROOT = process.cwd();
+// Resolved lazily at call time so tests can chdir before invoking
+// runIteration / runLoop. In production cwd is set once at process start
+// and doesn't change, so behavior is unchanged.
+function seaRoot(): string {
+  return process.cwd();
+}
 
 /** Resolve the conductor playbook path, falling back across providers. */
 function resolveConductorPath(provider?: Provider): string {
   for (const name of conductorFileCandidates(provider)) {
-    const p = path.join(SEA_ROOT, name);
+    const p = path.join(seaRoot(), name);
     if (existsSync(p)) return p;
   }
   // Fallback to provider's preferred (will be created by meta-evolution)
-  return path.join(SEA_ROOT, conductorFile(provider));
+  return path.join(seaRoot(), conductorFile(provider));
 }
 
 let stopping = false;
@@ -41,16 +53,35 @@ function sleep(ms: number): Promise<void> {
 /**
  * Run a single iteration through the configured pipeline.
  * Default: plan → research → synthesize → evaluate → evolve → summarize
+ *
+ * Halts early (returns with `halted` set) if state.status is `completed` or
+ * `paused` — guards against closeout-drift where the loop keeps dispatching
+ * after the project has been moved to a terminal state.
  */
 export async function runIteration(
   projectName: string,
   config: LoopConfig = DEFAULT_LOOP_CONFIG
-): Promise<{ iteration: number; score: number | null }> {
-  const projectDir = path.join(SEA_ROOT, "projects", projectName);
+): Promise<{
+  iteration: number;
+  score: number | null;
+  halted?: { reason: "completed" | "paused" };
+}> {
+  const projectDir = path.join(seaRoot(), "projects", projectName);
   const raw = await readFile(path.join(projectDir, "state.json"), "utf-8");
   const state: ProjectState = JSON.parse(raw);
   const iter = state.iteration;
   const iterStr = String(iter).padStart(3, "0");
+
+  if (state.status === "completed" || state.status === "paused") {
+    console.log(
+      `\n🛑 Project status: ${state.status}. Iteration skipped.`
+    );
+    if (state.completionReason) {
+      console.log(`   Reason: ${state.completionReason}`);
+    }
+    console.log(`   To resume, set state.status to "active" in state.json.\n`);
+    return { iteration: iter, score: null, halted: { reason: state.status } };
+  }
 
   console.log(
     `\n━━━ Iteration ${iter} (persona v${String(state.personaVersion).padStart(3, "0")}) ━━━\n`
@@ -59,6 +90,11 @@ export async function runIteration(
   // Ensure knowledge + scratch dirs exist
   await initKnowledge(projectDir);
   await mkdir(path.join(projectDir, "scratch"), { recursive: true });
+
+  // Capture pre-iteration baseline so informationGain() can compute a true
+  // delta. The findings.iteration field is per-expert-dispatch, not per
+  // pipeline iteration, so iteration-field filtering over-counts legacy data.
+  await captureIterationBaseline(projectDir, iterStr);
 
   // Load pipeline config
   const pipeline = await loadPipeline(projectDir);
@@ -229,10 +265,16 @@ export async function runLoop(
 
   while (!stopping && totalIterations < config.maxIterations) {
     const result = await runIteration(projectName, config);
+    if (result.halted) {
+      console.log(
+        `\n🏁 Halting loop: project ${result.halted.reason}. Ran ${totalIterations} iterations.`
+      );
+      return;
+    }
     totalIterations++;
 
     // Read current state for meta check
-    const projectDir = path.join(SEA_ROOT, "projects", projectName);
+    const projectDir = path.join(seaRoot(), "projects", projectName);
     const state: ProjectState = JSON.parse(
       await readFile(path.join(projectDir, "state.json"), "utf-8")
     );
@@ -243,13 +285,13 @@ export async function runLoop(
 
       await snapshotFile(
         resolveConductorPath(config.provider),
-        path.join(SEA_ROOT, "conductor-history")
+        path.join(seaRoot(), "conductor-history")
       );
 
       const metaPrompt = await assemblePrompt("meta", projectName, config.provider);
       await runAndTrace(
         metaPrompt,
-        SEA_ROOT,
+        seaRoot(),
         path.join(projectDir, "traces"),
         `iter-${String(state.iteration - 1).padStart(3, "0")}-meta`,
         config.provider ? { provider: config.provider } : undefined
@@ -427,12 +469,13 @@ async function printIterationStory(
   const width = 64;
 
   // Gather narrative data from files already on disk
-  const [findings, questions, allScores, lineageRaw, reflectionRaw] = await Promise.all([
+  const [findings, questions, allScores, lineageRaw, reflectionRaw, baseline] = await Promise.all([
     readFindings(projectDir),
     readQuestions(projectDir),
     readScores(projectDir),
     safeRead(path.join(projectDir, "lineage", "changes.jsonl")),
     safeRead(path.join(projectDir, "reflections", `iter-${iterStr}.md`)),
+    readIterationBaseline(projectDir, iterStr),
   ]);
 
   // Score delta
@@ -448,8 +491,8 @@ async function printIterationStory(
         : ` (${scoreDelta.toFixed(1)})`
       : "";
 
-  // Information gain this iteration
-  const gain = informationGain(findings, questions, iter);
+  // Information gain this iteration (baseline-delta, not iteration-field filter)
+  const gain = informationGain(findings, questions, baseline);
   const openQs = questions.filter((q) => q.status === "open");
   const verified = findings.filter((f) => f.status === "verified").length;
 

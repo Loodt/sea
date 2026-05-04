@@ -101,40 +101,60 @@ describe("queryFindings", () => {
 // ── informationGain ──
 
 describe("informationGain", () => {
-  it("counts new findings for an iteration", () => {
+  const emptyBaseline = { findingIds: [], resolvedQuestionIds: [], refutedFindingIds: [] };
+
+  it("counts new findings as those not present in the baseline", () => {
     const findings = [
-      makeFinding({ iteration: 3 }),
-      makeFinding({ id: "F002", iteration: 3 }),
-      makeFinding({ id: "F003", iteration: 2 }),
+      makeFinding({ id: "F001" }),
+      makeFinding({ id: "F002" }),
+      makeFinding({ id: "F003" }),
     ];
-    const result = informationGain(findings, [], 3);
+    const baseline = { findingIds: ["F001"], resolvedQuestionIds: [], refutedFindingIds: [] };
+    const result = informationGain(findings, [], baseline);
     expect(result.newFindings).toBe(2);
   });
 
-  it("counts resolved questions for an iteration", () => {
+  it("counts resolved questions as those resolved since baseline", () => {
     const questions = [
-      makeQuestion({ status: "resolved", resolvedAt: 5 }),
+      makeQuestion({ id: "Q001", status: "resolved", resolvedAt: 5 }),
       makeQuestion({ id: "Q002", status: "resolved", resolvedAt: 5 }),
       makeQuestion({ id: "Q003", status: "resolved", resolvedAt: 4 }),
       makeQuestion({ id: "Q004", status: "open" }),
     ];
-    const result = informationGain([], questions, 5);
+    const baseline = { findingIds: [], resolvedQuestionIds: ["Q003"], refutedFindingIds: [] };
+    const result = informationGain([], questions, baseline);
     expect(result.resolvedQuestions).toBe(2);
   });
 
-  it("counts contradictions (refuted findings verified at iteration)", () => {
+  it("ignores legacy iteration-field collisions (the original bug)", () => {
+    // Both findings have iteration:1, but only F002 was added this iteration.
     const findings = [
-      makeFinding({ status: "refuted", verifiedAt: 3 }),
-      makeFinding({ id: "F002", status: "refuted", verifiedAt: 3 }),
-      makeFinding({ id: "F003", status: "refuted", verifiedAt: 2 }),
+      makeFinding({ id: "F001", iteration: 1 }),
+      makeFinding({ id: "F002", iteration: 1 }),
     ];
-    const result = informationGain(findings, [], 3);
+    const baseline = { findingIds: ["F001"], resolvedQuestionIds: [], refutedFindingIds: [] };
+    const result = informationGain(findings, [], baseline);
+    expect(result.newFindings).toBe(1);
+  });
+
+  it("counts contradictions as refuted findings not refuted at baseline", () => {
+    const findings = [
+      makeFinding({ id: "F001", status: "refuted" }),
+      makeFinding({ id: "F002", status: "refuted" }),
+      makeFinding({ id: "F003", status: "refuted" }),
+    ];
+    const baseline = { findingIds: ["F001", "F002", "F003"], resolvedQuestionIds: [], refutedFindingIds: ["F001"] };
+    const result = informationGain(findings, [], baseline);
     expect(result.contradictions).toBe(2);
   });
 
   it("returns zeros for no activity", () => {
-    const result = informationGain([], [], 1);
+    const result = informationGain([], [], emptyBaseline);
     expect(result).toEqual({ newFindings: 0, resolvedQuestions: 0, contradictions: 0 });
+  });
+
+  it("throws if baseline is missing (fail loudly)", () => {
+    expect(() => informationGain([], [], null)).toThrow(/baseline missing/);
   });
 });
 

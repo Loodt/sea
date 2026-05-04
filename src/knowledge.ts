@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Finding, Question } from "./types.js";
 import { atomicAppendJsonl, atomicUpdateJsonl } from "./file-lock.js";
@@ -401,17 +402,78 @@ export async function initKnowledge(projectDir: string): Promise<void> {
 
 // ── Metrics derived from knowledge ──
 
+export interface IterationBaseline {
+  findingIds: string[];
+  resolvedQuestionIds: string[];
+  refutedFindingIds: string[];
+}
+
+function baselinePath(projectDir: string, iterStr: string): string {
+  return path.join(projectDir, "scratch", `iter-${iterStr}-baseline.json`);
+}
+
+/**
+ * Capture findings/questions state at the start of an iteration so
+ * informationGain() can compute a true delta rather than relying on the
+ * `iteration` field (which is stamped per-expert-dispatch, not per
+ * pipeline iteration, and collides across runs).
+ */
+export async function captureIterationBaseline(
+  projectDir: string,
+  iterStr: string
+): Promise<IterationBaseline> {
+  const [findings, questions] = await Promise.all([
+    readFindings(projectDir),
+    readQuestions(projectDir),
+  ]);
+  const baseline: IterationBaseline = {
+    findingIds: findings.map((f) => f.id),
+    resolvedQuestionIds: questions
+      .filter((q) => q.status === "resolved")
+      .map((q) => q.id),
+    refutedFindingIds: findings.filter((f) => f.status === "refuted").map((f) => f.id),
+  };
+  await mkdir(path.dirname(baselinePath(projectDir, iterStr)), { recursive: true });
+  await writeFile(
+    baselinePath(projectDir, iterStr),
+    JSON.stringify(baseline),
+    "utf-8"
+  );
+  return baseline;
+}
+
+export async function readIterationBaseline(
+  projectDir: string,
+  iterStr: string
+): Promise<IterationBaseline | null> {
+  const p = baselinePath(projectDir, iterStr);
+  if (!existsSync(p)) return null;
+  const raw = await readFile(p, "utf-8");
+  return JSON.parse(raw) as IterationBaseline;
+}
+
 export function informationGain(
   findings: Finding[],
   questions: Question[],
-  iteration: number
+  baseline: IterationBaseline | null
 ): { newFindings: number; resolvedQuestions: number; contradictions: number } {
-  const newFindings = findings.filter((f) => f.iteration === iteration).length;
+  if (!baseline) {
+    // Missing baseline = caller skipped captureIterationBaseline at iter start.
+    // Fail loudly rather than silently report wrong numbers.
+    throw new Error(
+      "informationGain: baseline missing. Call captureIterationBaseline() at iteration start."
+    );
+  }
+  const baseFindings = new Set(baseline.findingIds);
+  const baseResolved = new Set(baseline.resolvedQuestionIds);
+  const baseRefuted = new Set(baseline.refutedFindingIds);
+
+  const newFindings = findings.filter((f) => !baseFindings.has(f.id)).length;
   const resolvedQuestions = questions.filter(
-    (q) => q.status === "resolved" && q.resolvedAt === iteration
+    (q) => q.status === "resolved" && !baseResolved.has(q.id)
   ).length;
   const contradictions = findings.filter(
-    (f) => f.status === "refuted" && f.verifiedAt === iteration
+    (f) => f.status === "refuted" && !baseRefuted.has(f.id)
   ).length;
   return { newFindings, resolvedQuestions, contradictions };
 }

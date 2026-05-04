@@ -68,6 +68,8 @@ export interface ProjectState {
   createdAt: string;
   updatedAt: string;
   scores: number[];
+  completedAt?: string;
+  completionReason?: string;
 }
 
 export interface Score {

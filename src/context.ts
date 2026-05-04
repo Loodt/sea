@@ -3,7 +3,7 @@ import path from "node:path";
 import type { StepType, ProjectState, Score, PipelineConfig, Provider } from "./types.js";
 import { CONTEXT_BUDGETS, DEFAULT_PIPELINE, conductorFile, conductorFileCandidates } from "./types.js";
 import { getIntegritySnippets } from "./integrity.js";
-import { readSummary, readFindings, readQuestions, informationGain } from "./knowledge.js";
+import { readSummary, readFindings, readQuestions } from "./knowledge.js";
 import { readScores } from "./metrics.js";
 import { isPatternRelevant } from "./pattern-filter.js";
 
@@ -377,10 +377,11 @@ async function assembleEvaluate(
   const allScores = await readScores(projectDir);
   const recentScores = lastN(allScores, 3);
 
-  // Knowledge metrics for stagnation detection
-  const findings = await readFindings(projectDir);
-  const questions = await readQuestions(projectDir);
-  const gain = informationGain(findings, questions, iter);
+  // Note: information-gain metrics are intentionally omitted from the
+  // evaluate prompt. Findings are persisted in the summarize step, which
+  // runs *after* evaluate, so any gain reading here would always show 0
+  // in pipeline mode and falsely trigger stagnation/process-compliance
+  // deductions. The iteration-story (post-summarize) shows the real gain.
 
   const integrity = getIntegritySnippets("evaluate");
 
@@ -405,12 +406,6 @@ ${truncate(experiment, 1500)}
 ## Iteration: ${iter}
 
 ${recentScores.length > 0 ? `## Recent Score Trend\n${JSON.stringify(recentScores.map((s) => ({ iter: s.iteration, overall: s.overall })))}` : ""}
-
-## Information Gain This Iteration
-- New findings: ${gain.newFindings}
-- Resolved questions: ${gain.resolvedQuestions}
-- Contradictions detected: ${gain.contradictions}
-${gain.newFindings === 0 && gain.resolvedQuestions === 0 ? "\n**⚠ STAGNATION WARNING:** Zero new findings and zero resolved questions. This iteration may not have added value. Flag this for the evolve step." : ""}
 
 ## Instructions
 1. Score this iteration on each rubric dimension (1-10):
