@@ -1,6 +1,6 @@
 // ── Provider Layer ──
 
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "codex-local";
 
 /**
  * Auto-detect which LLM harness is running this process.
@@ -41,6 +41,26 @@ export const PROVIDERS: Record<Provider, ProviderConfig> = {
   codex: {
     binary: process.platform === "win32" ? "codex.cmd" : "codex",
     baseArgs: ["-a", "never", "--search", "exec", "-", "--color", "never"],
+    modelFlag: "--model",
+    instructionFile: "AGENTS.md",
+  },
+  "codex-local": {
+    // Approval policy + sandbox mode are configured in $CODEX_HOME/config.toml
+    // (approval_policy="never", sandbox_mode="danger-full-access") — -a is top-level
+    // only, not exec-level, and `--oss` must follow `exec` to be honored.
+    binary: process.platform === "win32" ? "codex.cmd" : "codex",
+    baseArgs: [
+      "exec",
+      "--oss",
+      "--local-provider",
+      "ollama",
+      "-m",
+      "llama3.1:8b-instruct-q4_K_M",
+      "--skip-git-repo-check",
+      "--color",
+      "never",
+      "-",
+    ],
     modelFlag: "--model",
     instructionFile: "AGENTS.md",
   },
@@ -391,6 +411,7 @@ export const DEFAULT_CONDUCTOR_CONFIG: ConductorConfig = {
 };
 
 export interface ConductorMetric {
+  eventId?: string;                // stable dispatch-event identity (preferred dedupe key)
   conductorIteration: number;
   questionId: string;
   expertStatus: ExpertHandoff["status"];
@@ -398,7 +419,8 @@ export interface ConductorMetric {
   findingsPersisted?: number;       // actual store delta after integration (findingsAfter - findingsBefore)
   attritionRate?: number;           // (findingsAdded - findingsPersisted) / findingsAdded, [0,1]
   questionsResolved: number;
-  newQuestionsCreated: number;
+  newQuestionsCreated: number;      // gross new questions created and kept (must be >=0)
+  openQuestionsDelta?: number;      // openAfter - openBefore (may be negative)
   innerIterationsRun: number;
   timestamp: string;
   exhaustionReason?: ExhaustionReason;

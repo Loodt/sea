@@ -362,7 +362,8 @@ export async function runConductorIteration(
 
   // Snapshot knowledge store BEFORE expert loop (experts write directly to findings.jsonl)
   const findingsBeforeDispatch = (await readFindings(projectDir)).length;
-  const questionsBeforeDispatch = (await readQuestions(projectDir)).length;
+  const questionsBeforeDispatchList = await readQuestions(projectDir);
+  const openQuestionsBeforeDispatch = questionsBeforeDispatchList.filter((q) => q.status === "open").length;
 
   // ═══ CALL 3: Dispatch Expert Loop (with one retry on zero-finding crash) ═══
   console.log(`\n🔬 DISPATCH — expert running (max ${effectiveMaxIter} iterations)...`);
@@ -591,18 +592,26 @@ export async function runConductorIteration(
 
   // Compute dispatch-level delta (captures findings written by expert + integration)
   const findingsAfterDispatch = (await readFindings(projectDir)).length;
-  const questionsAfterDispatch = (await readQuestions(projectDir)).length;
+  const questionsAfterDispatchList = await readQuestions(projectDir);
+  const openQuestionsAfterDispatch = questionsAfterDispatchList.filter((q) => q.status === "open").length;
+  const newQuestionsCreated = questionsAfterDispatchList.filter((q) => q.iteration === cIter).length;
+  const openQuestionsDelta = openQuestionsAfterDispatch - openQuestionsBeforeDispatch;
   const fileDelta = findingsAfterDispatch - findingsBeforeDispatch;
   const handoffDelta = handoff.findings?.length || 0;
   const delta = {
     findingsAdded: Math.max(fileDelta, handoffDelta),
-    questionsAdded: questionsAfterDispatch - questionsBeforeDispatch,
+    questionsAdded: newQuestionsCreated,
+    openQuestionsDelta,
   };
   if (fileDelta === 0 && handoffDelta > 0) {
     console.log(`   ℹ File delta was 0 but handoff reports ${handoffDelta} findings (expert wrote directly)`);
   }
   if (delta.findingsAdded > 0 || delta.questionsAdded > 0) {
     console.log(`   ✓ Dispatch delta: +${delta.findingsAdded} findings, +${delta.questionsAdded} questions`);
+  }
+  if (delta.openQuestionsDelta !== 0) {
+    const sign = delta.openQuestionsDelta > 0 ? "+" : "";
+    console.log(`   ℹ Open questions delta: ${sign}${delta.openQuestionsDelta}`);
   }
   await appendSpan(projectDir, {
     id: `conductor-${cIterStr}-integrate`,
@@ -696,6 +705,7 @@ export async function runConductorIteration(
 
   // Log metric
   await appendConductorMetric(projectDir, {
+    eventId: `conductor-${cIterStr}-${selection.questionId}`,
     conductorIteration: cIter,
     questionId: selection.questionId,
     expertStatus: handoff.status,
@@ -704,6 +714,7 @@ export async function runConductorIteration(
     attritionRate,
     questionsResolved: handoff.questionUpdates.length,
     newQuestionsCreated: delta.questionsAdded,
+    openQuestionsDelta: delta.openQuestionsDelta,
     innerIterationsRun: handoff.iterationsRun,
     timestamp: new Date().toISOString(),
     ...(effectiveExhaustionReason ? { exhaustionReason: effectiveExhaustionReason } : {}),
@@ -724,7 +735,7 @@ export async function runConductorIteration(
     iteration: cIter,
     target: "iteration",
     changeType,
-    changeSummary: `${selection.questionType} dispatch on ${selection.questionId}: ${handoff.status}, +${delta.findingsAdded}f, +${delta.questionsAdded}q`,
+    changeSummary: `${selection.questionType} dispatch on ${selection.questionId}: ${handoff.status}, +${delta.findingsAdded}f, +${delta.questionsAdded}q, Δopen ${delta.openQuestionsDelta}`,
     reasoning: (handoff.summary || "(no summary)").slice(0, 400),
     scoreBefore: null,
   });
@@ -1080,14 +1091,24 @@ async function appendConductorMetric(
   await mkdir(metricsDir, { recursive: true });
   const filePath = path.join(metricsDir, "conductor-metrics.jsonl");
 
-  // Deduplication: skip if this conductorIteration already logged
+  // Deduplication: skip if this dispatch-event already logged.
+  // Never dedupe by conductorIteration alone (metrics are event records, not iteration-unique).
+  const legacyIdentity = `${metric.conductorIteration}:${metric.questionId}`;
+  const metricIdentities = metric.eventId ? [metric.eventId, legacyIdentity] : [legacyIdentity];
   try {
     const existing = await readFile(filePath, "utf-8");
     const alreadyLogged = existing.trim().split("\n").filter(Boolean).some((line) => {
-      try { return JSON.parse(line).conductorIteration === metric.conductorIteration; } catch { return false; }
+      try {
+        const parsed = JSON.parse(line) as Partial<ConductorMetric>;
+        const parsedLegacy = `${parsed.conductorIteration}:${parsed.questionId}`;
+        const parsedIdentities = parsed.eventId ? [parsed.eventId, parsedLegacy] : [parsedLegacy];
+        return parsedIdentities.some((id) => metricIdentities.includes(id));
+      } catch {
+        return false;
+      }
     });
     if (alreadyLogged) {
-      console.log(`   ℹ Metric for conductor iteration ${metric.conductorIteration} already exists — skipping`);
+      console.log(`   ℹ Metric event ${metricIdentities[0]} already exists — skipping`);
       return;
     }
   } catch {

@@ -278,8 +278,18 @@ function extractMarkdownSection(content: string, heading: string): string | null
   const start = normalized.indexOf(`${heading}\n`);
   if (start === -1) return null;
 
-  const next = normalized.indexOf("\n## ", start + heading.length + 1);
-  const end = next === -1 ? normalized.length : next;
+  const nextHeading = normalized.indexOf("\n## ", start + heading.length + 1);
+  // The footer marker is not a heading, so if the preserved section is the last
+  // section in the file, the old implementation would accidentally capture the
+  // footer (sometimes repeatedly) and re-emit it on regeneration.
+  const footerMarker = normalized.indexOf(
+    "\n_Store-derived summary regenerated",
+    start + heading.length + 1
+  );
+
+  let end = normalized.length;
+  if (nextHeading !== -1) end = nextHeading;
+  if (footerMarker !== -1) end = Math.min(end, footerMarker);
   return normalized.slice(start, end).trimEnd();
 }
 
